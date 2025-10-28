@@ -7,23 +7,25 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/slack-go/slack"
 )
 
-type Thread struct {
-	Parent  slack.Message   `json:"parent"`
-	Replies []slack.Message `json:"replies"`
-}
-
 type Export struct {
 	ChannelID   string          `json:"channel_id"`
 	ChannelName string          `json:"channel_name"`
 	ExportedAt  time.Time       `json:"exported_at"`
-	Messages    []slack.Message `json:"messages"`
-	Threads     []Thread        `json:"threads"`
+	Messages    []SimpleMessage `json:"messages"`
+}
+
+type SimpleMessage struct {
+	User    string          `json:"user"`
+	Message string          `json:"message"`
+	Date    string          `json:"date"`
+	Replies []SimpleMessage `json:"replies,omitempty"`
 }
 
 func main() {
@@ -64,7 +66,7 @@ func main() {
 		time.Sleep(delay)
 	}
 
-	var threads []Thread
+	replyMap := make(map[string][]slack.Message)
 	for _, m := range all {
 		if m.ThreadTimestamp != "" && m.Timestamp != m.ThreadTimestamp {
 			continue
@@ -72,13 +74,10 @@ func main() {
 		if m.ReplyCount == 0 && m.ThreadTimestamp == "" {
 			continue
 		}
-		ts := m.Timestamp
-		if m.ThreadTimestamp != "" {
-			ts = m.ThreadTimestamp
-		}
+		ts := threadTimestamp(m)
 		replies := fetchReplies(ctx, api, channelID, ts, delay)
 		if len(replies) > 0 {
-			threads = append(threads, Thread{Parent: m, Replies: replies})
+			replyMap[ts] = replies
 			time.Sleep(delay)
 		}
 	}
@@ -87,8 +86,7 @@ func main() {
 		ChannelID:   channelID,
 		ChannelName: channelName,
 		ExportedAt:  time.Now().UTC(),
-		Messages:    all,
-		Threads:     threads,
+		Messages:    buildSimpleMessages(all, replyMap),
 	}
 
 	f, err := os.Create(out)
@@ -157,6 +155,107 @@ func fetchReplies(ctx context.Context, api *slack.Client, channelID, ts string, 
 		time.Sleep(delay)
 	}
 	return out
+}
+
+func buildSimpleMessages(messages []slack.Message, replyMap map[string][]slack.Message) []SimpleMessage {
+	out := make([]SimpleMessage, 0, len(messages))
+	for _, m := range messages {
+		if isReply(m) {
+			continue
+		}
+		key := threadTimestamp(m)
+		replies := buildSimpleReplies(replyMap[key], key, m.Timestamp)
+		out = append(out, toSimpleMessage(m, replies))
+	}
+	return out
+}
+
+func buildSimpleReplies(messages []slack.Message, parentKey, parentTimestamp string) []SimpleMessage {
+	if len(messages) == 0 {
+		return nil
+	}
+	replies := make([]SimpleMessage, 0, len(messages))
+	for _, msg := range messages {
+		if msg.Timestamp == "" {
+			continue
+		}
+		if msg.Timestamp == parentKey || msg.Timestamp == parentTimestamp {
+			// skip the parent message which is often returned as the first element
+			continue
+		}
+		replies = append(replies, toSimpleMessage(msg, nil))
+	}
+	if len(replies) == 0 {
+		return nil
+	}
+	return replies
+}
+
+func toSimpleMessage(msg slack.Message, replies []SimpleMessage) SimpleMessage {
+	if len(replies) == 0 {
+		replies = nil
+	}
+	return SimpleMessage{
+		User:    sender(msg),
+		Message: msg.Text,
+		Date:    formatTimestamp(msg.Timestamp),
+		Replies: replies,
+	}
+}
+
+func sender(msg slack.Message) string {
+	if msg.User != "" {
+		return msg.User
+	}
+	if msg.Username != "" {
+		return msg.Username
+	}
+	return msg.BotID
+}
+
+func formatTimestamp(ts string) string {
+	t, err := parseSlackTimestamp(ts)
+	if err != nil {
+		return ts
+	}
+	return t.UTC().Format(time.RFC3339)
+}
+
+func parseSlackTimestamp(ts string) (time.Time, error) {
+	parts := strings.SplitN(ts, ".", 2)
+	if len(parts) == 0 || parts[0] == "" {
+		return time.Time{}, errors.New("invalid slack timestamp")
+	}
+	secs, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil {
+		return time.Time{}, err
+	}
+	var nsecs int64
+	if len(parts) > 1 {
+		fractional := parts[1]
+		if len(fractional) > 9 {
+			fractional = fractional[:9]
+		}
+		for len(fractional) < 9 {
+			fractional += "0"
+		}
+		nsecs, err = strconv.ParseInt(fractional, 10, 64)
+		if err != nil {
+			return time.Time{}, err
+		}
+	}
+	return time.Unix(secs, nsecs).UTC(), nil
+}
+
+func isReply(msg slack.Message) bool {
+	return msg.ThreadTimestamp != "" && msg.Timestamp != msg.ThreadTimestamp
+}
+
+func threadTimestamp(msg slack.Message) string {
+	if msg.ThreadTimestamp != "" {
+		return msg.ThreadTimestamp
+	}
+	return msg.Timestamp
 }
 
 func retryAfter(err error) int {
