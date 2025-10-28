@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -29,22 +30,33 @@ type SimpleMessage struct {
 }
 
 func main() {
-	var token, channelID, out string
+	var token, channelID, out, userCachePath string
 	var delay time.Duration
 	flag.StringVar(&token, "token", os.Getenv("SLACK_TOKEN"), "Slack bot token (or set SLACK_TOKEN)")
 	flag.StringVar(&channelID, "channel", "", "Slack channel ID (e.g., C123...)")
 	flag.StringVar(&out, "out", "slack_export.json", "Output file")
+	flag.StringVar(&userCachePath, "user-cache", "slack_users.json", "Path to the Slack user email cache")
 	flag.DurationVar(&delay, "delay", time.Second, "Delay between requests")
 	flag.Parse()
 
 	if token == "" || channelID == "" {
-		fmt.Fprintln(os.Stderr, "usage: slack-export -channel C123 [-token xoxb-...] [-out file] [-delay 1s]")
+		fmt.Fprintln(os.Stderr, "usage: slack-export -channel C123 [-token xoxb-...] [-out file] [-delay 1s] [-user-cache slack_users.json]")
 		os.Exit(2)
 	}
 
 	api := slack.New(token)
 
 	ctx := context.Background()
+	resolver, err := NewUserResolver(ctx, api, userCachePath, delay)
+	if err != nil {
+		fail(err)
+	}
+	defer func() {
+		if err := resolver.Save(); err != nil {
+			fail(err)
+		}
+	}()
+
 	info, _ := api.GetConversationInfoContext(ctx, &slack.GetConversationInfoInput{ChannelID: channelID, IncludeLocale: false})
 	channelName := ""
 	if info != nil {
@@ -86,7 +98,7 @@ func main() {
 		ChannelID:   channelID,
 		ChannelName: channelName,
 		ExportedAt:  time.Now().UTC(),
-		Messages:    buildSimpleMessages(all, replyMap),
+		Messages:    buildSimpleMessages(all, replyMap, resolver),
 	}
 
 	f, err := os.Create(out)
@@ -157,20 +169,20 @@ func fetchReplies(ctx context.Context, api *slack.Client, channelID, ts string, 
 	return out
 }
 
-func buildSimpleMessages(messages []slack.Message, replyMap map[string][]slack.Message) []SimpleMessage {
+func buildSimpleMessages(messages []slack.Message, replyMap map[string][]slack.Message, resolver *UserResolver) []SimpleMessage {
 	out := make([]SimpleMessage, 0, len(messages))
 	for _, m := range messages {
 		if isReply(m) {
 			continue
 		}
 		key := threadTimestamp(m)
-		replies := buildSimpleReplies(replyMap[key], key, m.Timestamp)
-		out = append(out, toSimpleMessage(m, replies))
+		replies := buildSimpleReplies(replyMap[key], key, m.Timestamp, resolver)
+		out = append(out, toSimpleMessage(m, replies, resolver))
 	}
 	return out
 }
 
-func buildSimpleReplies(messages []slack.Message, parentKey, parentTimestamp string) []SimpleMessage {
+func buildSimpleReplies(messages []slack.Message, parentKey, parentTimestamp string, resolver *UserResolver) []SimpleMessage {
 	if len(messages) == 0 {
 		return nil
 	}
@@ -183,7 +195,7 @@ func buildSimpleReplies(messages []slack.Message, parentKey, parentTimestamp str
 			// skip the parent message which is often returned as the first element
 			continue
 		}
-		replies = append(replies, toSimpleMessage(msg, nil))
+		replies = append(replies, toSimpleMessage(msg, nil, resolver))
 	}
 	if len(replies) == 0 {
 		return nil
@@ -191,26 +203,148 @@ func buildSimpleReplies(messages []slack.Message, parentKey, parentTimestamp str
 	return replies
 }
 
-func toSimpleMessage(msg slack.Message, replies []SimpleMessage) SimpleMessage {
+func toSimpleMessage(msg slack.Message, replies []SimpleMessage, resolver *UserResolver) SimpleMessage {
 	if len(replies) == 0 {
 		replies = nil
 	}
 	return SimpleMessage{
-		User:    sender(msg),
+		User:    resolveSender(msg, resolver),
 		Message: msg.Text,
 		Date:    formatTimestamp(msg.Timestamp),
 		Replies: replies,
 	}
 }
 
-func sender(msg slack.Message) string {
+func resolveSender(msg slack.Message, resolver *UserResolver) string {
 	if msg.User != "" {
-		return msg.User
+		return resolver.Lookup(msg.User)
 	}
 	if msg.Username != "" {
 		return msg.Username
 	}
 	return msg.BotID
+}
+
+type UserResolver struct {
+	ctx           context.Context
+	api           *slack.Client
+	delay         time.Duration
+	path          string
+	cache         map[string]string
+	dirty         bool
+	seen          map[string]bool
+	fetchAttempts int
+}
+
+func NewUserResolver(ctx context.Context, api *slack.Client, path string, delay time.Duration) (*UserResolver, error) {
+	cache := make(map[string]string)
+	if path != "" {
+		if data, err := os.ReadFile(path); err == nil && len(data) > 0 {
+			if err := json.Unmarshal(data, &cache); err != nil {
+				return nil, err
+			}
+		} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return nil, err
+		}
+	}
+	return &UserResolver{
+		ctx:   ctx,
+		api:   api,
+		delay: delay,
+		path:  path,
+		cache: cache,
+		seen:  make(map[string]bool),
+	}, nil
+}
+
+func (r *UserResolver) Lookup(userID string) string {
+	if userID == "" {
+		return userID
+	}
+	if email, ok := r.cache[userID]; ok && email != "" {
+		return email
+	}
+	if !isResolvableUserID(userID) {
+		return userID
+	}
+	r.fetchAttempts++
+	attempt := r.fetchAttempts
+	email, err := r.fetchFromSlack(userID)
+	if err != nil {
+		if attempt == 1 {
+			fail(fmt.Errorf("failed to resolve first Slack user %s: %w", userID, err))
+		}
+		r.warnOnce(userID, err)
+		r.cache[userID] = userID
+		r.dirty = true
+		return userID
+	}
+	if email == "" {
+		email = userID
+	}
+	r.cache[userID] = email
+	r.dirty = true
+	return email
+}
+
+func (r *UserResolver) Save() error {
+	if !r.dirty || r.path == "" {
+		return nil
+	}
+	if dir := filepath.Dir(r.path); dir != "." && dir != "" {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
+	}
+	tmp := r.path + ".tmp"
+	f, err := os.Create(tmp)
+	if err != nil {
+		return err
+	}
+	enc := json.NewEncoder(f)
+	if err := enc.Encode(r.cache); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp, r.path)
+}
+
+func (r *UserResolver) fetchFromSlack(userID string) (string, error) {
+	for {
+		user, err := r.api.GetUserInfoContext(r.ctx, userID)
+		if rl := retryAfter(err); rl > 0 {
+			time.Sleep(time.Duration(rl) * time.Second)
+			continue
+		}
+		if err != nil {
+			return "", err
+		}
+		if r.delay > 0 {
+			time.Sleep(r.delay)
+		}
+		if user != nil && user.Profile.Email != "" {
+			return user.Profile.Email, nil
+		}
+		return "", nil
+	}
+}
+
+func isResolvableUserID(userID string) bool {
+	return strings.HasPrefix(userID, "U") || strings.HasPrefix(userID, "W")
+}
+
+func (r *UserResolver) warnOnce(userID string, err error) {
+	if r.seen == nil {
+		r.seen = make(map[string]bool)
+	}
+	if r.seen[userID] {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "warning: could not resolve Slack user %s to an email: %v\n", userID, err)
+	r.seen[userID] = true
 }
 
 func formatTimestamp(ts string) string {
