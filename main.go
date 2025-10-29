@@ -31,7 +31,7 @@ type SimpleMessage struct {
 }
 
 const (
-	exportFilePath = "./export"
+	exportFilePath = "./export.json"
 	userCacheFile  = "./users.json"
 	slackTokenEnv  = "SLACK_TOKEN"
 )
