@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -35,6 +36,11 @@ const (
 	slackTokenEnv  = "SLACK_TOKEN"
 )
 
+var stdoutLog = log.New(os.Stdout, "", log.LstdFlags)
+
+func logf(format string, args ...interface{}) {
+	stdoutLog.Printf(format, args...)
+}
 func main() {
 	var channelID string
 	var delay time.Duration
@@ -57,6 +63,9 @@ func main() {
 	api := slack.New(token)
 
 	ctx := context.Background()
+	logf("starting export for channel %s with request delay %s", channelID, delay)
+	logf("export destination: %s", out)
+	logf("user cache file: %s", userCachePath)
 	resolver, err := NewUserResolver(ctx, api, userCachePath, delay)
 	if err != nil {
 		fail(err)
@@ -71,24 +80,38 @@ func main() {
 	channelName := ""
 	if info != nil {
 		channelName = info.Name
+		if channelName != "" {
+			logf("resolved channel name: %s", channelName)
+		} else {
+			logf("channel information retrieved without a name")
+		}
+	} else {
+		logf("could not retrieve channel info, continuing with ID only")
 	}
 
 	var all []slack.Message
 	cursor := ""
 	for {
+		logf("requesting conversation history (cursor=%q)", cursor)
 		h, err := getHistory(ctx, api, channelID, cursor)
 		if err != nil {
 			fail(err)
 		}
+		logf("received %d messages", len(h.Messages))
 		all = append(all, h.Messages...)
 		if h.ResponseMetaData.NextCursor == "" {
+			logf("no more history pages; collected %d messages", len(all))
 			break
 		}
 		cursor = h.ResponseMetaData.NextCursor
+		if delay > 0 {
+			logf("waiting %s before requesting next history page", delay)
+		}
 		time.Sleep(delay)
 	}
 
 	replyMap := make(map[string][]slack.Message)
+	rootMessages := make([]slack.Message, 0, len(all))
 	for _, m := range all {
 		if m.ThreadTimestamp != "" && m.Timestamp != m.ThreadTimestamp {
 			continue
@@ -96,12 +119,25 @@ func main() {
 		if m.ReplyCount == 0 && m.ThreadTimestamp == "" {
 			continue
 		}
+		rootMessages = append(rootMessages, m)
+	}
+
+	logf("processing replies for %d root messages", len(rootMessages))
+	for i, m := range rootMessages {
 		ts := threadTimestamp(m)
+		logf("fetching replies for thread %s (%d/%d)", ts, i+1, len(rootMessages))
 		replies := fetchReplies(ctx, api, channelID, ts, delay)
 		if len(replies) > 0 {
+			logf("retrieved %d replies for thread %s", len(replies), ts)
 			replyMap[ts] = replies
 			time.Sleep(delay)
+			if delay > 0 {
+				logf("waiting %s before next thread request", delay)
+			}
+		} else {
+			logf("no replies returned for thread %s", ts)
 		}
+		logf("Processed main message %d/%d", i+1, len(rootMessages))
 	}
 
 	exp := Export{
@@ -118,6 +154,7 @@ func main() {
 	defer f.Close()
 	enc := json.NewEncoder(f)
 	enc.SetIndent("", "  ")
+	logf("writing %d exported messages to %s", len(exp.Messages), out)
 	if err := enc.Encode(exp); err != nil {
 		fail(err)
 	}
@@ -134,8 +171,12 @@ func getHistory(ctx context.Context, api *slack.Client, channelID, cursor string
 			Inclusive:          true,
 		})
 		if rl := retryAfter(err); rl > 0 {
+			logf("rate limited while fetching history; retrying in %d seconds", rl)
 			time.Sleep(time.Duration(rl) * time.Second)
 			continue
+		}
+		if err != nil {
+			logf("history request returned an error: %v", err)
 		}
 		return h, err
 	}
@@ -152,6 +193,7 @@ func fetchReplies(ctx context.Context, api *slack.Client, channelID, ts string, 
 			err     error
 		)
 		for {
+			logf("requesting replies for thread %s (cursor=%q)", ts, cursor)
 			resp, hasMore, next, err = api.GetConversationRepliesContext(ctx, &slack.GetConversationRepliesParameters{
 				ChannelID:          channelID,
 				Timestamp:          ts,
@@ -161,21 +203,28 @@ func fetchReplies(ctx context.Context, api *slack.Client, channelID, ts string, 
 				Inclusive:          true,
 			})
 			if rl := retryAfter(err); rl > 0 {
+				logf("rate limited while fetching replies for thread %s; retrying in %d seconds", ts, rl)
 				time.Sleep(time.Duration(rl) * time.Second)
 				continue
 			}
 			if err != nil {
+				logf("failed to fetch replies for thread %s: %v", ts, err)
 				return out
 			}
 			break
 		}
+		logf("received %d replies in current page for thread %s (hasMore=%t)", len(resp), ts, hasMore)
 		out = append(out, resp...)
 		if !hasMore {
 			break
 		}
 		cursor = next
+		if delay > 0 {
+			logf("waiting %s before requesting next replies page for thread %s", delay, ts)
+		}
 		time.Sleep(delay)
 	}
+	logf("completed fetching replies for thread %s; total replies collected: %d", ts, len(out))
 	return out
 }
 
@@ -243,6 +292,7 @@ type UserResolver struct {
 	cache         map[string]string
 	dirty         bool
 	seen          map[string]bool
+	logEvents     map[string]bool
 	fetchAttempts int
 }
 
@@ -258,12 +308,13 @@ func NewUserResolver(ctx context.Context, api *slack.Client, path string, delay 
 		}
 	}
 	return &UserResolver{
-		ctx:   ctx,
-		api:   api,
-		delay: delay,
-		path:  path,
-		cache: cache,
-		seen:  make(map[string]bool),
+		ctx:       ctx,
+		api:       api,
+		delay:     delay,
+		path:      path,
+		cache:     cache,
+		seen:      make(map[string]bool),
+		logEvents: make(map[string]bool),
 	}, nil
 }
 
@@ -272,26 +323,34 @@ func (r *UserResolver) Lookup(userID string) string {
 		return userID
 	}
 	if email, ok := r.cache[userID]; ok && email != "" {
+		r.logOnce("cache", userID, "resolved user %s from cache as %s", userID, email)
 		return email
 	}
 	if !isResolvableUserID(userID) {
+		r.logOnce("skip", userID, "skipping lookup for non-resolvable user identifier %s", userID)
 		return userID
 	}
 	r.fetchAttempts++
 	attempt := r.fetchAttempts
+	logf("fetching profile for user %s from Slack (attempt %d)", userID, attempt)
 	email, err := r.fetchFromSlack(userID)
 	if err != nil {
 		if attempt == 1 {
 			fail(fmt.Errorf("failed to resolve first Slack user %s: %w", userID, err))
 		}
+		logf("failed to resolve user %s via Slack: %v", userID, err)
 		r.warnOnce(userID, err)
 		r.cache[userID] = userID
 		r.dirty = true
 		return userID
 	}
 	if email == "" {
+		logf("Slack profile for user %s did not include an email; defaulting to ID", userID)
 		email = userID
+	} else {
+		logf("resolved user %s to email %s", userID, email)
 	}
+	logf("caching resolved identity for user %s", userID)
 	r.cache[userID] = email
 	r.dirty = true
 	return email
@@ -301,6 +360,7 @@ func (r *UserResolver) Save() error {
 	if !r.dirty || r.path == "" {
 		return nil
 	}
+	logf("persisting user cache to %s (%d entries)", r.path, len(r.cache))
 	if dir := filepath.Dir(r.path); dir != "." && dir != "" {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return err
@@ -319,20 +379,27 @@ func (r *UserResolver) Save() error {
 	if err := f.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmp, r.path)
+	if err := os.Rename(tmp, r.path); err != nil {
+		return err
+	}
+	logf("user cache persisted to %s", r.path)
+	return nil
 }
 
 func (r *UserResolver) fetchFromSlack(userID string) (string, error) {
 	for {
 		user, err := r.api.GetUserInfoContext(r.ctx, userID)
 		if rl := retryAfter(err); rl > 0 {
+			logf("rate limited while resolving user %s; retrying in %d seconds", userID, rl)
 			time.Sleep(time.Duration(rl) * time.Second)
 			continue
 		}
 		if err != nil {
+			logf("Slack returned an error while resolving user %s: %v", userID, err)
 			return "", err
 		}
 		if r.delay > 0 {
+			logf("waiting %s before next user info request", r.delay)
 			time.Sleep(r.delay)
 		}
 		if user != nil && user.Profile.Email != "" {
@@ -344,6 +411,18 @@ func (r *UserResolver) fetchFromSlack(userID string) (string, error) {
 
 func isResolvableUserID(userID string) bool {
 	return strings.HasPrefix(userID, "U") || strings.HasPrefix(userID, "W")
+}
+
+func (r *UserResolver) logOnce(event, userID string, format string, args ...interface{}) {
+	if r.logEvents == nil {
+		r.logEvents = make(map[string]bool)
+	}
+	key := event + ":" + userID
+	if r.logEvents[key] {
+		return
+	}
+	r.logEvents[key] = true
+	logf(format, args...)
 }
 
 func (r *UserResolver) warnOnce(userID string, err error) {
