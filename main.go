@@ -29,20 +29,30 @@ type SimpleMessage struct {
 	Replies []SimpleMessage `json:"replies,omitempty"`
 }
 
+const (
+	exportFilePath = "./export"
+	userCacheFile  = "./users.json"
+	slackTokenEnv  = "SLACK_TOKEN"
+)
+
 func main() {
-	var token, channelID, out, userCachePath string
+	var channelID string
 	var delay time.Duration
-	flag.StringVar(&token, "token", os.Getenv("SLACK_TOKEN"), "Slack bot token (or set SLACK_TOKEN)")
 	flag.StringVar(&channelID, "channel", "", "Slack channel ID (e.g., C123...)")
-	flag.StringVar(&out, "out", "slack_export.json", "Output file")
-	flag.StringVar(&userCachePath, "user-cache", "slack_users.json", "Path to the Slack user email cache")
 	flag.DurationVar(&delay, "delay", time.Second, "Delay between requests")
 	flag.Parse()
 
-	if token == "" || channelID == "" {
-		fmt.Fprintln(os.Stderr, "usage: slack-export -channel C123 [-token xoxb-...] [-out file] [-delay 1s] [-user-cache slack_users.json]")
+	token := strings.TrimSpace(os.Getenv(slackTokenEnv))
+	if channelID == "" {
+		fmt.Fprintln(os.Stderr, "usage: slack-export -channel C123 [-delay 1s]")
 		os.Exit(2)
 	}
+	if token == "" {
+		fail(fmt.Errorf("environment variable %s must be set", slackTokenEnv))
+	}
+
+	out := exportFilePath
+	userCachePath := userCacheFile
 
 	api := slack.New(token)
 
