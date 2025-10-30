@@ -40,3 +40,36 @@ package it into a minimal runtime image tagged as `slack-exporter`.
      slack-exporter \
      -channel "$CHANNEL"
    ```
+
+## Sample export.json Output
+
+When the exporter finishes, `/tmp/export.json` will contain a JSON document similar to:
+
+```json
+{
+  "channel_id": "C1234567890",
+  "channel_name": "project-updates",
+  "exported_at": "2024-05-18T12:34:56Z",
+  "messages": [
+    {
+      "user": "alice",
+      "message": "Heads up on today's deploy.",
+      "date": "2024-05-17T16:22:45Z",
+      "replies": [
+        {
+          "user": "bob",
+          "message": "Thanks for the update!",
+          "date": "2024-05-17T16:40:03Z"
+        }
+      ]
+    },
+    {
+      "user": "carol",
+      "message": "Reminder: stand-up moves to 11am tomorrow.",
+      "date": "2024-05-17T18:05:12Z"
+    }
+  ]
+}
+```
+
+The top-level `messages` array includes root messages that either have replies or start a thread, and replies are nested inside their parent message under the `replies` field.
