@@ -1,0 +1,152 @@
+name: Release
+
+"on":
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+env:
+  APP_NAME: slack-utils
+  RELEASE_BRANCH: release
+
+jobs:
+  validate-tag:
+    name: Validate release tag
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Export tag name
+        id: tag
+        run: echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+
+      - name: Ensure tag points at release branch HEAD
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git fetch --force origin "+refs/heads/${RELEASE_BRANCH}:refs/remotes/origin/${RELEASE_BRANCH}"
+
+          tag_commit="$(git rev-list -n 1 "${GITHUB_REF_NAME}")"
+          release_commit="$(git rev-parse "refs/remotes/origin/${RELEASE_BRANCH}")"
+
+          if [ "$tag_commit" != "$release_commit" ]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} points to ${tag_commit}, but origin/${RELEASE_BRANCH} is ${release_commit}. Tag the current ${RELEASE_BRANCH} branch HEAD to publish a release."
+            exit 1
+          fi
+
+  build:
+    name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
+    needs: validate-tag
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            archive: tar.gz
+          - goos: linux
+            goarch: arm64
+            archive: tar.gz
+          - goos: darwin
+            goarch: amd64
+            archive: tar.gz
+          - goos: darwin
+            goarch: arm64
+            archive: tar.gz
+          - goos: windows
+            goarch: amd64
+            archive: zip
+          - goos: windows
+            goarch: arm64
+            archive: zip
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build archive
+        shell: bash
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+        run: |
+          set -euo pipefail
+
+          package_dir="build/package"
+          dist_dir="dist"
+          binary="${APP_NAME}"
+          asset="${APP_NAME}_${GOOS}_${GOARCH}.${{ matrix.archive }}"
+
+          if [ "$GOOS" = "windows" ]; then
+            binary="${binary}.exe"
+          fi
+
+          rm -rf build "$dist_dir"
+          mkdir -p "$package_dir" "$dist_dir"
+
+          go build -trimpath -ldflags="-s -w" -o "${package_dir}/${binary}" .
+          cp README.md "$package_dir/"
+          if [ -f LICENSE ]; then
+            cp LICENSE "$package_dir/"
+          fi
+
+          if [ "${{ matrix.archive }}" = "zip" ]; then
+            (cd "$package_dir" && zip -q -r "../../${dist_dir}/${asset}" .)
+          else
+            tar -C "$package_dir" -czf "${dist_dir}/${asset}" .
+          fi
+
+      - name: Upload archive artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.APP_NAME }}_${{ matrix.goos }}_${{ matrix.goarch }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub Release
+    needs:
+      - validate-tag
+      - build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Add checksums and installer scripts
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cp install.sh install.ps1 dist/
+          (cd dist && sha256sum ${APP_NAME}_* install.sh install.ps1 > checksums.txt)
+
+      - name: Create or update release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.validate-tag.outputs.tag }}
+          name: ${{ env.APP_NAME }} ${{ needs.validate-tag.outputs.tag }}
+          generate_release_notes: true
+          files: dist/*

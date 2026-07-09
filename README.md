@@ -2,6 +2,22 @@
 
 A small CLI for exporting Slack conversation history to JSON.
 
+## Install
+
+macOS/Linux:
+
+```bash
+curl -fsSL https://github.com/SomeoneWithOptions/slack-utils/releases/latest/download/install.sh | sh
+```
+
+Windows PowerShell:
+
+```powershell
+iwr -useb https://github.com/SomeoneWithOptions/slack-utils/releases/latest/download/install.ps1 | iex
+```
+
+The installer downloads the latest GitHub Release asset for your OS/architecture and verifies `checksums.txt` before installing. Set `INSTALL_DIR=/path/to/bin` on macOS/Linux to choose a different install location.
+
 ## Setup
 
 Set a Slack API token with access to the conversation you want to export:
@@ -78,3 +94,16 @@ Useful flags:
 The export is written as JSON with top-level conversation metadata and a `messages` array. Thread replies are nested under each root message in `replies`.
 
 The CLI may also create `users.json` as a local user cache.
+
+## Releasing
+
+Releases are published from the `release` branch only.
+
+```bash
+git checkout release
+git merge main
+git tag v0.1.0
+git push origin release v0.1.0
+```
+
+Pushing a `v*` tag that points at the current `release` branch HEAD starts the GitHub Actions release workflow. It builds macOS, Linux, and Windows binaries for `amd64` and `arm64`, creates checksums, and attaches everything to the GitHub Release.
