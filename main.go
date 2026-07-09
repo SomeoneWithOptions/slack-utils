@@ -46,19 +46,26 @@ func main() {
 	var delay time.Duration
 	var sinceStr string
 	var toStr string
+	var out string
 	flag.StringVar(&channelID, "channel", "", "Slack channel ID (e.g., C123...)")
 	flag.DurationVar(&delay, "delay", time.Second, "Delay between requests")
 	flag.StringVar(&sinceStr, "since", "", "Only include messages on or after this time (RFC3339, YYYY-MM-DD, or relative duration like 7d/24h)")
 	flag.StringVar(&toStr, "to", "", "Only include messages on or before this time (RFC3339 or YYYY-MM-DD)")
+	flag.StringVar(&out, "o", exportFilePath, "Path to write the export JSON")
+	flag.StringVar(&out, "output", exportFilePath, "Path to write the export JSON")
 	flag.Parse()
 
 	token := strings.TrimSpace(os.Getenv(slackTokenEnv))
 	if channelID == "" {
-		fmt.Fprintln(os.Stderr, "usage: slack-export -channel C123 [-delay 1s] [-since 7d] [-to 2024-05-01]")
+		fmt.Fprintln(os.Stderr, "usage: slack-export -channel C123 [-delay 1s] [-since 7d] [-to 2024-05-01] [-o export.json]")
 		os.Exit(2)
 	}
 	if token == "" {
 		fail(fmt.Errorf("environment variable %s must be set", slackTokenEnv))
+	}
+	out = strings.TrimSpace(out)
+	if out == "" {
+		fail(fmt.Errorf("-o/-output path must not be empty"))
 	}
 
 	oldest, err := parseTimeBound(sinceStr, false)
@@ -77,7 +84,6 @@ func main() {
 		}
 	}
 
-	out := exportFilePath
 	userCachePath := userCacheFile
 
 	api := slack.New(token)
@@ -170,6 +176,11 @@ func main() {
 		Messages:    buildSimpleMessages(all, replyMap, resolver),
 	}
 
+	if dir := filepath.Dir(out); dir != "." && dir != "" {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			fail(fmt.Errorf("create output directory %s: %w", dir, err))
+		}
+	}
 	f, err := os.Create(out)
 	if err != nil {
 		fail(err)
