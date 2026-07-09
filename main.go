@@ -36,9 +36,15 @@ const (
 	slackTokenEnv  = "SLACK_TOKEN"
 )
 
-var stdoutLog = log.New(os.Stdout, "", log.LstdFlags)
+var (
+	stdoutLog = log.New(os.Stdout, "", log.LstdFlags)
+	quietMode bool
+)
 
 func logf(format string, args ...interface{}) {
+	if quietMode {
+		return
+	}
 	stdoutLog.Printf(format, args...)
 }
 func main() {
@@ -57,11 +63,13 @@ func main() {
 	flag.StringVar(&out, "output", exportFilePath, "Path to write the export JSON")
 	flag.IntVar(&limit, "limit", 0, "Maximum number of root messages to export (0 = no limit)")
 	flag.BoolVar(&noReplies, "no-replies", false, "Skip fetching thread replies (export root messages only)")
+	flag.BoolVar(&quietMode, "quiet", false, "Suppress progress logs (errors still go to stderr)")
+	flag.BoolVar(&quietMode, "q", false, "Suppress progress logs (errors still go to stderr)")
 	flag.Parse()
 
 	token := strings.TrimSpace(os.Getenv(slackTokenEnv))
 	if channelID == "" {
-		fmt.Fprintln(os.Stderr, "usage: slack-export -channel C123 [-delay 1s] [-since 7d] [-to 2024-05-01] [-limit 50] [-no-replies] [-o export.json]")
+		fmt.Fprintln(os.Stderr, "usage: slack-export -channel C123 [-delay 1s] [-since 7d] [-to 2024-05-01] [-limit 50] [-no-replies] [-q] [-o export.json]")
 		os.Exit(2)
 	}
 	if token == "" {
