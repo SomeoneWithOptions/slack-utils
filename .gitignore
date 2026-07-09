@@ -1,0 +1,12 @@
+# OS/editor metadata
+.DS_Store
+
+# Generated Slack data / local caches
+export.json
+users.json
+users.json.tmp
+
+# Local build artifacts
+slackChannelScrap
+slack-export
+*.log

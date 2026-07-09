@@ -12,6 +12,5 @@ RUN CGO_ENABLED=0 GOOS=linux go build -o /bin/slack-export ./...
 FROM gcr.io/distroless/base-debian12
 WORKDIR /app
 COPY --from=build /bin/slack-export /app/slack-export
-COPY --from=build /src/users.json /app/users.json
 ENTRYPOINT ["/app/slack-export"]
 CMD ["-h"]

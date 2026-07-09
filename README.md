@@ -3,6 +3,15 @@
 Tooling around the `slack-exporter` image to pull message history for a single
 Slack channel and save it locally as JSON.
 
+## Sensitive/generated files
+
+The exporter can create local files containing private Slack data:
+
+- `export.json` contains exported channel messages.
+- `users.json` is a local user cache that can contain Slack user IDs and emails.
+
+These files are intentionally ignored by git and excluded from Docker build
+contexts. Do not commit real exports, caches, or Slack tokens.
 
 ## Build the Docker image
 

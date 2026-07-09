@@ -1,0 +1,13 @@
+.git
+.gitignore
+.DS_Store
+
+# Never send generated Slack data or user caches in Docker build contexts.
+export.json
+users.json
+users.json.tmp
+
+# Local build artifacts
+slackChannelScrap
+slack-export
+*.log
