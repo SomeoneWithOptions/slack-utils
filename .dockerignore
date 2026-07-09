@@ -8,6 +8,7 @@ users.json
 users.json.tmp
 
 # Local build artifacts
+slack-utils
 slackChannelScrap
 slack-export
 *.log

@@ -1,4 +1,4 @@
-module github.com/SomeoneWithOptions/slackChannelScrap
+module github.com/SomeoneWithOptions/slack-utils
 
 go 1.24.5
 

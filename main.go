@@ -31,6 +31,7 @@ type SimpleMessage struct {
 }
 
 const (
+	cliName        = "slack-utils"
 	exportFilePath = "./export.json"
 	userCacheFile  = "./users.json"
 	slackTokenEnv  = "SLACK_TOKEN"
@@ -48,54 +49,162 @@ func logf(format string, args ...interface{}) {
 	stdoutLog.Printf(format, args...)
 }
 func main() {
-	var channelID string
-	var delay time.Duration
-	var sinceStr string
-	var toStr string
-	var out string
-	var limit int
-	var noReplies bool
-	flag.StringVar(&channelID, "channel", "", "Slack channel ID (e.g., C123...)")
-	flag.DurationVar(&delay, "delay", time.Second, "Delay between requests")
-	flag.StringVar(&sinceStr, "since", "", "Only include messages on or after this time (RFC3339, YYYY-MM-DD, or relative duration like 7d/24h)")
-	flag.StringVar(&toStr, "to", "", "Only include messages on or before this time (RFC3339 or YYYY-MM-DD)")
-	flag.StringVar(&out, "o", exportFilePath, "Path to write the export JSON")
-	flag.StringVar(&out, "output", exportFilePath, "Path to write the export JSON")
-	flag.IntVar(&limit, "limit", 0, "Maximum number of root messages to export (0 = no limit)")
-	flag.BoolVar(&noReplies, "no-replies", false, "Skip fetching thread replies (export root messages only)")
-	flag.BoolVar(&quietMode, "quiet", false, "Suppress progress logs (errors still go to stderr)")
-	flag.BoolVar(&quietMode, "q", false, "Suppress progress logs (errors still go to stderr)")
-	flag.Parse()
+	runCLI(os.Args[1:])
+}
 
-	token := strings.TrimSpace(os.Getenv(slackTokenEnv))
-	if channelID == "" {
-		fmt.Fprintln(os.Stderr, "usage: slack-export -channel C123 [-delay 1s] [-since 7d] [-to 2024-05-01] [-limit 50] [-no-replies] [-q] [-o export.json]")
+func runCLI(args []string) {
+	if len(args) == 0 {
+		printRootUsage(os.Stderr)
 		os.Exit(2)
 	}
+
+	switch args[0] {
+	case "-h", "--help", "help":
+		printRootUsage(os.Stdout)
+	case "channels", "channel":
+		runChannelsCommand(args[1:])
+	default:
+		if strings.HasPrefix(args[0], "-") {
+			fmt.Fprintf(os.Stderr, "root-level export flags are deprecated; use `%s channels export` instead.\n\n", cliName)
+			runChannelsExport(args)
+			return
+		}
+		fmt.Fprintf(os.Stderr, "unknown command %q\n\n", args[0])
+		printRootUsage(os.Stderr)
+		os.Exit(2)
+	}
+}
+
+func runChannelsCommand(args []string) {
+	if len(args) == 0 {
+		printChannelsUsage(os.Stderr)
+		os.Exit(2)
+	}
+
+	switch args[0] {
+	case "-h", "--help", "help":
+		printChannelsUsage(os.Stdout)
+	case "export":
+		runChannelsExport(args[1:])
+	default:
+		fmt.Fprintf(os.Stderr, "unknown channels action %q\n\n", args[0])
+		printChannelsUsage(os.Stderr)
+		os.Exit(2)
+	}
+}
+
+func printRootUsage(out *os.File) {
+	fmt.Fprintf(out, `Slack utilities.
+
+Usage:
+  %[1]s <resource> <action> [flags]
+
+Commands:
+  %[1]s channels export   Export a channel's message history to JSON
+
+Run "%[1]s <resource> <action> -h" for command-specific flags.
+`, cliName)
+}
+
+func printChannelsUsage(out *os.File) {
+	fmt.Fprintf(out, `Slack channel utilities.
+
+Usage:
+  %[1]s channels <action> [flags]
+
+Actions:
+  export   Export a channel's message history to JSON
+
+Run "%[1]s channels export -h" for export flags.
+`, cliName)
+}
+
+type channelExportOptions struct {
+	channelID string
+	delay     time.Duration
+	sinceStr  string
+	toStr     string
+	out       string
+	limit     int
+	noReplies bool
+}
+
+func runChannelsExport(args []string) {
+	var opts channelExportOptions
+	fs := flag.NewFlagSet("channels export", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	fs.StringVar(&opts.channelID, "channel", "", "Slack channel ID (e.g., C123...)")
+	fs.DurationVar(&opts.delay, "delay", time.Second, "Delay between requests")
+	fs.StringVar(&opts.sinceStr, "since", "", "Only include messages on or after this time (RFC3339, YYYY-MM-DD, or relative duration like 7d/24h)")
+	fs.StringVar(&opts.toStr, "to", "", "Only include messages on or before this time (RFC3339 or YYYY-MM-DD)")
+	fs.StringVar(&opts.out, "o", exportFilePath, "Path to write the export JSON")
+	fs.StringVar(&opts.out, "output", exportFilePath, "Path to write the export JSON")
+	fs.IntVar(&opts.limit, "limit", 0, "Maximum number of root messages to export (0 = no limit)")
+	fs.BoolVar(&opts.noReplies, "no-replies", false, "Skip fetching thread replies (export root messages only)")
+	fs.BoolVar(&quietMode, "quiet", false, "Suppress progress logs (errors still go to stderr)")
+	fs.BoolVar(&quietMode, "q", false, "Suppress progress logs (errors still go to stderr)")
+	fs.Usage = func() {
+		fmt.Fprintf(fs.Output(), "Usage:\n  %s channels export -channel C123 [flags]\n\nFlags:\n", cliName)
+		fs.PrintDefaults()
+	}
+
+	if hasHelpArg(args) {
+		fs.SetOutput(os.Stdout)
+		fs.Usage()
+		return
+	}
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
+	if fs.NArg() > 0 {
+		fmt.Fprintf(os.Stderr, "unexpected argument %q\n\n", fs.Arg(0))
+		fs.Usage()
+		os.Exit(2)
+	}
+	if opts.channelID == "" {
+		fmt.Fprint(os.Stderr, "-channel is required\n\n")
+		fs.Usage()
+		os.Exit(2)
+	}
+
+	runChannelsExportWithOptions(opts)
+}
+
+func hasHelpArg(args []string) bool {
+	for _, arg := range args {
+		if arg == "-h" || arg == "--help" {
+			return true
+		}
+	}
+	return len(args) == 1 && args[0] == "help"
+}
+
+func runChannelsExportWithOptions(opts channelExportOptions) {
+	token := strings.TrimSpace(os.Getenv(slackTokenEnv))
 	if token == "" {
 		fail(fmt.Errorf("environment variable %s must be set", slackTokenEnv))
 	}
-	out = strings.TrimSpace(out)
+	out := strings.TrimSpace(opts.out)
 	if out == "" {
 		fail(fmt.Errorf("-o/-output path must not be empty"))
 	}
-	if limit < 0 {
+	if opts.limit < 0 {
 		fail(fmt.Errorf("-limit must be >= 0"))
 	}
 
-	oldest, err := parseTimeBound(sinceStr, false)
+	oldest, err := parseTimeBound(opts.sinceStr, false)
 	if err != nil {
-		fail(fmt.Errorf("invalid -since value %q: %w", sinceStr, err))
+		fail(fmt.Errorf("invalid -since value %q: %w", opts.sinceStr, err))
 	}
-	latest, err := parseTimeBound(toStr, true)
+	latest, err := parseTimeBound(opts.toStr, true)
 	if err != nil {
-		fail(fmt.Errorf("invalid -to value %q: %w", toStr, err))
+		fail(fmt.Errorf("invalid -to value %q: %w", opts.toStr, err))
 	}
 	if oldest != "" && latest != "" {
 		oldestTime, errOldest := parseSlackTimestamp(oldest)
 		latestTime, errLatest := parseSlackTimestamp(latest)
 		if errOldest == nil && errLatest == nil && oldestTime.After(latestTime) {
-			fail(fmt.Errorf("-since (%s) must be before or equal to -to (%s)", sinceStr, toStr))
+			fail(fmt.Errorf("-since (%s) must be before or equal to -to (%s)", opts.sinceStr, opts.toStr))
 		}
 	}
 
@@ -104,19 +213,19 @@ func main() {
 	api := slack.New(token)
 
 	ctx := context.Background()
-	logf("starting export for channel %s with request delay %s", channelID, delay)
+	logf("starting export for channel %s with request delay %s", opts.channelID, opts.delay)
 	if oldest != "" || latest != "" {
-		logf("time range filter: since=%s to=%s", formatBoundForLog(sinceStr, oldest), formatBoundForLog(toStr, latest))
+		logf("time range filter: since=%s to=%s", formatBoundForLog(opts.sinceStr, oldest), formatBoundForLog(opts.toStr, latest))
 	}
-	if limit > 0 {
-		logf("message limit: %d root messages", limit)
+	if opts.limit > 0 {
+		logf("message limit: %d root messages", opts.limit)
 	}
-	if noReplies {
+	if opts.noReplies {
 		logf("thread replies: disabled (-no-replies)")
 	}
 	logf("export destination: %s", out)
 	logf("user cache file: %s", userCachePath)
-	resolver, err := NewUserResolver(ctx, api, userCachePath, delay)
+	resolver, err := NewUserResolver(ctx, api, userCachePath, opts.delay)
 	if err != nil {
 		fail(err)
 	}
@@ -126,7 +235,7 @@ func main() {
 		}
 	}()
 
-	info, _ := api.GetConversationInfoContext(ctx, &slack.GetConversationInfoInput{ChannelID: channelID, IncludeLocale: false})
+	info, _ := api.GetConversationInfoContext(ctx, &slack.GetConversationInfoInput{ChannelID: opts.channelID, IncludeLocale: false})
 	channelName := ""
 	if info != nil {
 		channelName = info.Name
@@ -143,10 +252,10 @@ func main() {
 	cursor := ""
 	for {
 		pageLimit := 200
-		if limit > 0 {
-			remaining := limit - countRootMessages(all)
+		if opts.limit > 0 {
+			remaining := opts.limit - countRootMessages(all)
 			if remaining <= 0 {
-				logf("reached message limit of %d root messages; stopping history fetch", limit)
+				logf("reached message limit of %d root messages; stopping history fetch", opts.limit)
 				break
 			}
 			if remaining < pageLimit {
@@ -154,15 +263,15 @@ func main() {
 			}
 		}
 		logf("requesting conversation history (cursor=%q, limit=%d)", cursor, pageLimit)
-		h, err := getHistory(ctx, api, channelID, cursor, oldest, latest, pageLimit)
+		h, err := getHistory(ctx, api, opts.channelID, cursor, oldest, latest, pageLimit)
 		if err != nil {
 			fail(err)
 		}
 		logf("received %d messages", len(h.Messages))
 		all = append(all, h.Messages...)
-		if limit > 0 && countRootMessages(all) >= limit {
-			all = trimToRootLimit(all, limit)
-			logf("reached message limit of %d root messages; collected %d raw messages", limit, len(all))
+		if opts.limit > 0 && countRootMessages(all) >= opts.limit {
+			all = trimToRootLimit(all, opts.limit)
+			logf("reached message limit of %d root messages; collected %d raw messages", opts.limit, len(all))
 			break
 		}
 		if h.ResponseMetaData.NextCursor == "" {
@@ -170,14 +279,14 @@ func main() {
 			break
 		}
 		cursor = h.ResponseMetaData.NextCursor
-		if delay > 0 {
-			logf("waiting %s before requesting next history page", delay)
+		if opts.delay > 0 {
+			logf("waiting %s before requesting next history page", opts.delay)
 		}
-		time.Sleep(delay)
+		time.Sleep(opts.delay)
 	}
 
 	replyMap := make(map[string][]slack.Message)
-	if noReplies {
+	if opts.noReplies {
 		logf("skipping thread reply fetch (-no-replies)")
 	} else {
 		rootMessages := make([]slack.Message, 0, len(all))
@@ -195,13 +304,13 @@ func main() {
 		for i, m := range rootMessages {
 			ts := threadTimestamp(m)
 			logf("fetching replies for thread %s (%d/%d)", ts, i+1, len(rootMessages))
-			replies := fetchReplies(ctx, api, channelID, ts, delay)
+			replies := fetchReplies(ctx, api, opts.channelID, ts, opts.delay)
 			if len(replies) > 0 {
 				logf("retrieved %d replies for thread %s", len(replies), ts)
 				replyMap[ts] = replies
-				time.Sleep(delay)
-				if delay > 0 {
-					logf("waiting %s before next thread request", delay)
+				time.Sleep(opts.delay)
+				if opts.delay > 0 {
+					logf("waiting %s before next thread request", opts.delay)
 				}
 			} else {
 				logf("no replies returned for thread %s", ts)
@@ -211,7 +320,7 @@ func main() {
 	}
 
 	exp := Export{
-		ChannelID:   channelID,
+		ChannelID:   opts.channelID,
 		ChannelName: channelName,
 		ExportedAt:  time.Now().UTC(),
 		Messages:    buildSimpleMessages(all, replyMap, resolver),

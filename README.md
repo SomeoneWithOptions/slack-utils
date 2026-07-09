@@ -1,7 +1,6 @@
-# slackChannelScrap
+# slack-utils
 
-Tooling around the `slack-exporter` image to pull message history for a single
-Slack channel and save it locally as JSON.
+General Slack utility CLI. Today it supports exporting message history for a single Slack channel; the command layout is ready for more Slack utilities under resources like `channels` and `users`.
 
 ## Sensitive/generated files
 
@@ -10,47 +9,89 @@ The exporter can create local files containing private Slack data:
 - `export.json` contains exported channel messages.
 - `users.json` is a local user cache that can contain Slack user IDs and emails.
 
-These files are intentionally ignored by git and excluded from Docker build
-contexts. Do not commit real exports, caches, or Slack tokens.
+These files are intentionally ignored by git and excluded from Docker build contexts. Do not commit real exports, caches, or Slack tokens.
+
+## Build the CLI
+
+From the repository root:
+
+```bash
+go build -o slack-utils .
+```
 
 ## Build the Docker image
 
-If you want to build the container locally (instead of pulling a pre-built image),
-run the following from the repository root:
+If you want to build the container locally, run the following from the repository root:
 
 ```bash
-docker build -t slack-exporter .
+docker build -t slack-utils .
 ```
 
-This uses the multi-stage `Dockerfile` in the repo to compile the Go binary and
-package it into a minimal runtime image tagged as `slack-exporter`.
+This uses the multi-stage `Dockerfile` in the repo to compile the Go binary and package it into a minimal runtime image tagged as `slack-utils`.
 
 ## Usage
 
-1. Set the target channel ID and a Slack API token that has access to it:
+The CLI uses a resource/action structure:
+
+```bash
+slack-utils <resource> <action> [flags]
+```
+
+Current command:
+
+```bash
+slack-utils channels export -channel C1234567890
+```
+
+### Export a channel
+
+1. Set a Slack API token that has access to the target channel:
 
    ```bash
-   export TOKEN=your-slack-token
+   export SLACK_TOKEN=your-slack-token
    export CHANNEL=C1234567890
    ```
 
-2. Create the output file (or make sure it exists) so Docker can bind-mount it:
+2. Run the export:
 
    ```bash
-   touch /tmp/export.json
+   slack-utils channels export \
+     -channel "$CHANNEL" \
+     -o /tmp/export.json
    ```
 
-3. Run the exporter container to dump the conversation history into that file:
+Useful flags:
 
-   ```bash
-   docker run --rm \
-     -e SLACK_TOKEN="$TOKEN" \
-     -v /tmp/export.json:/app/export.json \
-     slack-exporter \
-     -channel "$CHANNEL"
-   ```
+```bash
+slack-utils channels export \
+  -channel "$CHANNEL" \
+  -since 7d \
+  -to 2024-05-01 \
+  -limit 50 \
+  -no-replies \
+  -q \
+  -o /tmp/export.json
+```
 
-## Sample export.json Output
+### Run with Docker
+
+Create the output file (or make sure it exists) so Docker can bind-mount it:
+
+```bash
+touch /tmp/export.json
+```
+
+Then run:
+
+```bash
+docker run --rm \
+  -e SLACK_TOKEN="$SLACK_TOKEN" \
+  -v /tmp/export.json:/app/export.json \
+  slack-utils \
+  channels export -channel "$CHANNEL"
+```
+
+## Sample export.json output
 
 When the exporter finishes, `/tmp/export.json` will contain a JSON document similar to:
 
@@ -81,4 +122,4 @@ When the exporter finishes, `/tmp/export.json` will contain a JSON document simi
 }
 ```
 
-The top-level `messages` array includes root messages that either have replies or start a thread, and replies are nested inside their parent message under the `replies` field.
+The top-level `messages` array includes root messages. Replies are nested inside their parent message under the `replies` field.
