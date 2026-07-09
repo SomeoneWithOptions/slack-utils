@@ -44,17 +44,37 @@ func logf(format string, args ...interface{}) {
 func main() {
 	var channelID string
 	var delay time.Duration
+	var sinceStr string
+	var toStr string
 	flag.StringVar(&channelID, "channel", "", "Slack channel ID (e.g., C123...)")
 	flag.DurationVar(&delay, "delay", time.Second, "Delay between requests")
+	flag.StringVar(&sinceStr, "since", "", "Only include messages on or after this time (RFC3339, YYYY-MM-DD, or relative duration like 7d/24h)")
+	flag.StringVar(&toStr, "to", "", "Only include messages on or before this time (RFC3339 or YYYY-MM-DD)")
 	flag.Parse()
 
 	token := strings.TrimSpace(os.Getenv(slackTokenEnv))
 	if channelID == "" {
-		fmt.Fprintln(os.Stderr, "usage: slack-export -channel C123 [-delay 1s]")
+		fmt.Fprintln(os.Stderr, "usage: slack-export -channel C123 [-delay 1s] [-since 7d] [-to 2024-05-01]")
 		os.Exit(2)
 	}
 	if token == "" {
 		fail(fmt.Errorf("environment variable %s must be set", slackTokenEnv))
+	}
+
+	oldest, err := parseTimeBound(sinceStr, false)
+	if err != nil {
+		fail(fmt.Errorf("invalid -since value %q: %w", sinceStr, err))
+	}
+	latest, err := parseTimeBound(toStr, true)
+	if err != nil {
+		fail(fmt.Errorf("invalid -to value %q: %w", toStr, err))
+	}
+	if oldest != "" && latest != "" {
+		oldestTime, errOldest := parseSlackTimestamp(oldest)
+		latestTime, errLatest := parseSlackTimestamp(latest)
+		if errOldest == nil && errLatest == nil && oldestTime.After(latestTime) {
+			fail(fmt.Errorf("-since (%s) must be before or equal to -to (%s)", sinceStr, toStr))
+		}
 	}
 
 	out := exportFilePath
@@ -64,6 +84,9 @@ func main() {
 
 	ctx := context.Background()
 	logf("starting export for channel %s with request delay %s", channelID, delay)
+	if oldest != "" || latest != "" {
+		logf("time range filter: since=%s to=%s", formatBoundForLog(sinceStr, oldest), formatBoundForLog(toStr, latest))
+	}
 	logf("export destination: %s", out)
 	logf("user cache file: %s", userCachePath)
 	resolver, err := NewUserResolver(ctx, api, userCachePath, delay)
@@ -93,7 +116,7 @@ func main() {
 	cursor := ""
 	for {
 		logf("requesting conversation history (cursor=%q)", cursor)
-		h, err := getHistory(ctx, api, channelID, cursor)
+		h, err := getHistory(ctx, api, channelID, cursor, oldest, latest)
 		if err != nil {
 			fail(err)
 		}
@@ -161,11 +184,13 @@ func main() {
 	fmt.Println("wrote", out)
 }
 
-func getHistory(ctx context.Context, api *slack.Client, channelID, cursor string) (*slack.GetConversationHistoryResponse, error) {
+func getHistory(ctx context.Context, api *slack.Client, channelID, cursor, oldest, latest string) (*slack.GetConversationHistoryResponse, error) {
 	for {
 		h, err := api.GetConversationHistoryContext(ctx, &slack.GetConversationHistoryParameters{
 			ChannelID:          channelID,
 			Cursor:             cursor,
+			Oldest:             oldest,
+			Latest:             latest,
 			Limit:              200,
 			IncludeAllMetadata: true,
 			Inclusive:          true,
@@ -180,6 +205,87 @@ func getHistory(ctx context.Context, api *slack.Client, channelID, cursor string
 		}
 		return h, err
 	}
+}
+
+// parseTimeBound converts a CLI time bound into a Slack timestamp string (seconds.nanoseconds).
+// endOfDay is used for date-only values so -to 2024-05-01 includes the whole day.
+func parseTimeBound(value string, endOfDay bool) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", nil
+	}
+
+	if t, err := time.Parse(time.RFC3339, value); err == nil {
+		return formatSlackTimestamp(t.UTC()), nil
+	}
+	if t, err := time.ParseInLocation("2006-01-02", value, time.UTC); err == nil {
+		if endOfDay {
+			t = t.Add(24*time.Hour - time.Nanosecond)
+		}
+		return formatSlackTimestamp(t.UTC()), nil
+	}
+	if !endOfDay {
+		if d, err := parseRelativeDuration(value); err == nil {
+			return formatSlackTimestamp(time.Now().UTC().Add(-d)), nil
+		}
+	}
+	return "", fmt.Errorf("use RFC3339, YYYY-MM-DD%s", relativeHint(endOfDay))
+}
+
+func relativeHint(endOfDay bool) string {
+	if endOfDay {
+		return ""
+	}
+	return ", or a relative duration like 7d/24h"
+}
+
+func parseRelativeDuration(value string) (time.Duration, error) {
+	if len(value) < 2 {
+		return 0, fmt.Errorf("invalid relative duration")
+	}
+	suffix := value[len(value)-1]
+	amountStr := value[:len(value)-1]
+	amount, err := strconv.ParseFloat(amountStr, 64)
+	if err != nil || amount < 0 {
+		return 0, fmt.Errorf("invalid relative duration")
+	}
+	switch suffix {
+	case 's', 'S':
+		return time.Duration(amount * float64(time.Second)), nil
+	case 'm', 'M':
+		return time.Duration(amount * float64(time.Minute)), nil
+	case 'h', 'H':
+		return time.Duration(amount * float64(time.Hour)), nil
+	case 'd', 'D':
+		return time.Duration(amount * float64(24*time.Hour)), nil
+	case 'w', 'W':
+		return time.Duration(amount * float64(7*24*time.Hour)), nil
+	default:
+		return 0, fmt.Errorf("unsupported duration suffix %q", string(suffix))
+	}
+}
+
+func formatSlackTimestamp(t time.Time) string {
+	secs := t.Unix()
+	nsecs := t.Nanosecond()
+	if nsecs == 0 {
+		return strconv.FormatInt(secs, 10)
+	}
+	return fmt.Sprintf("%d.%09d", secs, nsecs)
+}
+
+func formatBoundForLog(raw, slackTS string) string {
+	if raw == "" {
+		return "(none)"
+	}
+	if slackTS == "" {
+		return raw
+	}
+	t, err := parseSlackTimestamp(slackTS)
+	if err != nil {
+		return raw
+	}
+	return fmt.Sprintf("%s (%s)", raw, t.UTC().Format(time.RFC3339))
 }
 
 func fetchReplies(ctx context.Context, api *slack.Client, channelID, ts string, delay time.Duration) []slack.Message {
