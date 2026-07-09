@@ -80,6 +80,19 @@ slack-utils channels export \
   -o /tmp/export.json
 ```
 
+### Slack OAuth scopes
+
+The token in `SLACK_TOKEN` needs the history scope for the conversation type you export:
+
+- Public channel IDs (`C...`): `channels:history`
+- Private channel IDs (`G...`): `groups:history`
+- Direct message IDs (`D...`): `im:history`
+- Multi-person DM IDs (`G...`): `mpim:history`
+
+User email resolution needs `users:read`; add `users:read.email` if you want exported users to be email addresses instead of Slack IDs. Channel name lookup is optional and uses `channels:read`, `groups:read`, `im:read`, or `mpim:read` depending on the conversation type.
+
+When Slack returns `missing_scope`, the CLI prints the Slack API method, the specific missing/required scope when it can determine it, and remediation steps (add scope, reinstall/reauthorize app, update `SLACK_TOKEN`).
+
 ### Run with Docker
 
 Create the output file (or make sure it exists) so Docker can bind-mount it:
