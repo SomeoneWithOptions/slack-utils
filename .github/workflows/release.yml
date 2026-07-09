@@ -20,7 +20,7 @@ jobs:
       tag: ${{ steps.tag.outputs.tag }}
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7.0.0
         with:
           fetch-depth: 0
 
@@ -71,10 +71,10 @@ jobs:
             archive: zip
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7.0.0
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6.5.0
         with:
           go-version-file: go.mod
           cache: true
@@ -113,7 +113,7 @@ jobs:
           fi
 
       - name: Upload archive artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: ${{ env.APP_NAME }}_${{ matrix.goos }}_${{ matrix.goarch }}
           path: dist/*
@@ -127,10 +127,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7.0.0
 
       - name: Download build artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8.0.1
         with:
           path: dist
           merge-multiple: true
@@ -144,7 +144,7 @@ jobs:
           (cd dist && sha256sum ${APP_NAME}_* install.sh install.ps1 > checksums.txt)
 
       - name: Create or update release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3.0.1
         with:
           tag_name: ${{ needs.validate-tag.outputs.tag }}
           name: ${{ env.APP_NAME }} ${{ needs.validate-tag.outputs.tag }}
