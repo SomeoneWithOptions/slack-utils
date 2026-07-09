@@ -1,0 +1,46 @@
+#!/usr/bin/env sh
+set -eu
+
+# Build slack-utils with the latest stable Go toolchain published by go.dev.
+# Override GO_VERSION (for example, GO_VERSION=1.24.5) only when a reproducible
+# older build is needed.
+
+OUTPUT="${1:-${OUTPUT:-slack-utils}}"
+GO_IMAGE="${GO_IMAGE:-}"
+GO_VERSION="${GO_VERSION:-}"
+
+if [ -z "$GO_IMAGE" ]; then
+  if [ -z "$GO_VERSION" ]; then
+    if ! command -v curl >/dev/null 2>&1; then
+      echo "curl is required to discover the latest Go version. Set GO_VERSION or GO_IMAGE to skip discovery." >&2
+      exit 1
+    fi
+
+    GO_VERSION="$(curl -fsSL 'https://go.dev/VERSION?m=text' | awk 'NR == 1 { sub(/^go/, ""); print; exit }')"
+  fi
+
+  GO_VERSION="${GO_VERSION#go}"
+
+  if [ -z "$GO_VERSION" ]; then
+    echo "Unable to determine Go version." >&2
+    exit 1
+  fi
+
+  GO_IMAGE="golang:${GO_VERSION}-alpine"
+fi
+
+echo "Building ${OUTPUT} with ${GO_IMAGE}"
+docker pull "$GO_IMAGE"
+
+docker run --rm \
+  --user "$(id -u):$(id -g)" \
+  -e CGO_ENABLED=0 \
+  -e GOOS="${GOOS:-linux}" \
+  -e HOME=/tmp \
+  -e GOCACHE=/tmp/go-build-cache \
+  -e GOMODCACHE=/tmp/go-mod-cache \
+  -e OUTPUT="$OUTPUT" \
+  -v "$PWD":/src \
+  -w /src \
+  "$GO_IMAGE" \
+  sh -eu -c 'go version && go mod download && go build -trimpath -o "$OUTPUT" .'

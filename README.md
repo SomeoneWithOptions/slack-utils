@@ -13,10 +13,17 @@ These files are intentionally ignored by git and excluded from Docker build cont
 
 ## Build the CLI
 
-From the repository root:
+From the repository root, use the build helper so the binary is compiled with the latest stable Go toolchain published by go.dev:
 
 ```bash
-go build -o slack-utils .
+./scripts/build-binary
+```
+
+The helper requires Docker and curl, then pulls `golang:<latest>-alpine` before building. To override the output path or pin a version for debugging:
+
+```bash
+./scripts/build-binary /tmp/slack-utils
+GO_VERSION=1.24.5 ./scripts/build-binary
 ```
 
 ## Build the Docker image
@@ -24,10 +31,10 @@ go build -o slack-utils .
 If you want to build the container locally, run the following from the repository root:
 
 ```bash
-docker build -t slack-utils .
+docker build --pull -t slack-utils .
 ```
 
-This uses the multi-stage `Dockerfile` in the repo to compile the Go binary and package it into a minimal runtime image tagged as `slack-utils`.
+This uses the multi-stage `Dockerfile` in the repo to compile the Go binary with the latest `golang:alpine` base image and package it into a minimal runtime image tagged as `slack-utils`. You can pass `--build-arg GO_IMAGE=golang:<version>-alpine` when a specific compiler image is required.
 
 ## Usage
 
