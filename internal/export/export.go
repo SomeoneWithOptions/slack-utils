@@ -108,7 +108,7 @@ func Run(opts Options) {
 		}
 	}
 
-	api := slack.New(token)
+	api := newSlackClient(token)
 	ctx := context.Background()
 	log := opts.Log
 
@@ -242,6 +242,10 @@ func Run(opts Options) {
 		}
 	}
 
+	if err := prefetchMessageUsers(ctx, all, replyMap, resolver, log); err != nil {
+		applog.Fail(err)
+	}
+
 	exp := Result{
 		ChannelID:   opts.ChannelID,
 		ChannelName: channelName,
@@ -266,6 +270,46 @@ func Run(opts Options) {
 		applog.Fail(fmt.Errorf("write export JSON to %s: %w", out, err))
 	}
 	fmt.Println("wrote", out)
+}
+
+func newSlackClient(token string) *slack.Client {
+	cfg := slack.DefaultRetryConfig()
+	cfg.MaxRetries = 3
+	cfg.Handlers = slack.AllBuiltinRetryHandlers(cfg)
+	return slack.New(token, slack.OptionRetryConfig(cfg))
+}
+
+func prefetchMessageUsers(ctx context.Context, messages []slack.Message, replyMap map[string][]slack.Message, resolver *users.Resolver, log Logger) error {
+	ids := collectResolvableUserIDs(messages, replyMap)
+	if len(ids) == 0 {
+		return nil
+	}
+	log.Logf("prefetching profiles for %d unique users", len(ids))
+	return resolver.Prefetch(ctx, ids)
+}
+
+func collectResolvableUserIDs(messages []slack.Message, replyMap map[string][]slack.Message) []string {
+	seen := make(map[string]struct{})
+	var ids []string
+	add := func(id string) {
+		if !users.IsResolvableUserID(id) {
+			return
+		}
+		if _, ok := seen[id]; ok {
+			return
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	for _, msg := range messages {
+		add(msg.User)
+	}
+	for _, replies := range replyMap {
+		for _, msg := range replies {
+			add(msg.User)
+		}
+	}
+	return ids
 }
 
 func getHistory(ctx context.Context, api *slack.Client, channelID, cursor, oldest, latest string, limit int, log Logger) (*slack.GetConversationHistoryResponse, error) {

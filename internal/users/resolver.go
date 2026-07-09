@@ -69,6 +69,72 @@ func NewResolver(ctx context.Context, api *slack.Client, path string, delay time
 	}, nil
 }
 
+// Prefetch bulk-loads profiles for the provided user IDs into the cache.
+// Unknown or non-resolvable IDs are ignored. Already-cached IDs are skipped.
+func (r *Resolver) Prefetch(ctx context.Context, userIDs []string) error {
+	if r.api == nil || len(userIDs) == 0 {
+		return nil
+	}
+	if ctx == nil {
+		ctx = r.ctx
+	}
+
+	pending := make([]string, 0, len(userIDs))
+	seen := make(map[string]struct{}, len(userIDs))
+	for _, userID := range userIDs {
+		if !IsResolvableUserID(userID) {
+			continue
+		}
+		if email, ok := r.cache[userID]; ok && email != "" {
+			continue
+		}
+		if _, ok := seen[userID]; ok {
+			continue
+		}
+		seen[userID] = struct{}{}
+		pending = append(pending, userID)
+	}
+	if len(pending) == 0 {
+		return nil
+	}
+
+	const batchSize = 30
+	for start := 0; start < len(pending); start += batchSize {
+		end := start + batchSize
+		if end > len(pending) {
+			end = len(pending)
+		}
+		batch := pending[start:end]
+		r.log.Logf("prefetching profiles for %d users from Slack (batch %d-%d of %d)", len(batch), start+1, end, len(pending))
+
+		usersInfo, err := r.fetchUsersInfo(ctx, batch)
+		if err != nil {
+			return err
+		}
+
+		found := make(map[string]struct{}, len(usersInfo))
+		for _, user := range usersInfo {
+			found[user.ID] = struct{}{}
+			r.storeUser(&user)
+		}
+		for _, userID := range batch {
+			if _, ok := found[userID]; ok {
+				continue
+			}
+			// Keep unresolved members as IDs so Lookup does not retry them.
+			r.cache[userID] = userID
+			r.dirty = true
+			r.warnMissingEmailScopeOnce(userID)
+		}
+
+		if end < len(pending) && r.delay > 0 {
+			r.log.Logf("waiting %s before next user prefetch batch", r.delay)
+			time.Sleep(r.delay)
+		}
+	}
+	return nil
+}
+
 // Lookup returns an email or other identity string for userID.
 func (r *Resolver) Lookup(userID string) string {
 	if userID == "" {
@@ -78,14 +144,14 @@ func (r *Resolver) Lookup(userID string) string {
 		r.logOnce("cache", userID, "resolved user %s from cache as %s", userID, email)
 		return email
 	}
-	if !isResolvableUserID(userID) {
+	if !IsResolvableUserID(userID) {
 		r.logOnce("skip", userID, "skipping lookup for non-resolvable user identifier %s", userID)
 		return userID
 	}
 	r.fetchAttempts++
 	attempt := r.fetchAttempts
 	r.log.Logf("fetching profile for user %s from Slack (attempt %d)", userID, attempt)
-	email, err := r.fetchFromSlack(userID)
+	user, err := r.fetchUser(r.ctx, userID)
 	if err != nil {
 		if attempt == 1 {
 			applog.Fail(err)
@@ -96,16 +162,13 @@ func (r *Resolver) Lookup(userID string) string {
 		r.dirty = true
 		return userID
 	}
-	if email == "" {
+	email := r.storeUser(user)
+	if email == userID {
 		r.log.Logf("Slack profile for user %s did not include an email; defaulting to ID", userID)
-		r.warnMissingEmailScopeOnce(userID)
-		email = userID
 	} else {
 		r.log.Logf("resolved user %s to email %s", userID, email)
 	}
 	r.log.Logf("caching resolved identity for user %s", userID)
-	r.cache[userID] = email
-	r.dirty = true
 	return email
 }
 
@@ -140,9 +203,9 @@ func (r *Resolver) Save() error {
 	return nil
 }
 
-func (r *Resolver) fetchFromSlack(userID string) (string, error) {
+func (r *Resolver) fetchUser(ctx context.Context, userID string) (*slack.User, error) {
 	for {
-		user, err := r.api.GetUserInfoContext(r.ctx, userID)
+		user, err := r.api.GetUserInfoContext(ctx, userID)
 		if rl := slackerr.RetryAfterSeconds(err); rl > 0 {
 			r.log.Logf("rate limited while resolving user %s; retrying in %d seconds", userID, rl)
 			time.Sleep(time.Duration(rl) * time.Second)
@@ -150,28 +213,64 @@ func (r *Resolver) fetchFromSlack(userID string) (string, error) {
 		}
 		if err != nil {
 			r.log.Logf("Slack returned an error while resolving user %s: %v", userID, err)
-			return "", slackerr.Describe(err, slackerr.Details{
-				Operation:      fmt.Sprintf("resolve Slack user profile for %s", userID),
-				Method:         slackerr.MethodUsersInfo,
-				RequiredScopes: []string{"users:read"},
-				TokenEnv:       r.tokenEnv,
-				Hints: []string{
-					"To include email addresses in exports, also add the users:read.email scope.",
-				},
-			})
+			return nil, r.userInfoError(err, userID)
 		}
 		if r.delay > 0 {
 			r.log.Logf("waiting %s before next user info request", r.delay)
 			time.Sleep(r.delay)
 		}
-		if user != nil && user.Profile.Email != "" {
-			return user.Profile.Email, nil
-		}
-		return "", nil
+		return user, nil
 	}
 }
 
-func isResolvableUserID(userID string) bool {
+func (r *Resolver) fetchUsersInfo(ctx context.Context, userIDs []string) ([]slack.User, error) {
+	for {
+		usersPtr, err := r.api.GetUsersInfoContext(ctx, userIDs...)
+		if rl := slackerr.RetryAfterSeconds(err); rl > 0 {
+			r.log.Logf("rate limited while prefetching %d users; retrying in %d seconds", len(userIDs), rl)
+			time.Sleep(time.Duration(rl) * time.Second)
+			continue
+		}
+		if err != nil {
+			r.log.Logf("Slack returned an error while prefetching users: %v", err)
+			return nil, r.userInfoError(err, strings.Join(userIDs, ", "))
+		}
+		if usersPtr == nil {
+			return nil, nil
+		}
+		return *usersPtr, nil
+	}
+}
+
+func (r *Resolver) storeUser(user *slack.User) string {
+	if user == nil || user.ID == "" {
+		return ""
+	}
+	email := user.ID
+	if user.Profile.Email != "" {
+		email = user.Profile.Email
+	} else {
+		r.warnMissingEmailScopeOnce(user.ID)
+	}
+	r.cache[user.ID] = email
+	r.dirty = true
+	return email
+}
+
+func (r *Resolver) userInfoError(err error, subject string) error {
+	return slackerr.Describe(err, slackerr.Details{
+		Operation:      fmt.Sprintf("resolve Slack user profile for %s", subject),
+		Method:         slackerr.MethodUsersInfo,
+		RequiredScopes: []string{"users:read"},
+		TokenEnv:       r.tokenEnv,
+		Hints: []string{
+			"To include email addresses in exports, also add the users:read.email scope.",
+		},
+	})
+}
+
+// IsResolvableUserID reports whether id looks like a workspace member/app user ID.
+func IsResolvableUserID(userID string) bool {
 	return strings.HasPrefix(userID, "U") || strings.HasPrefix(userID, "W")
 }
 
