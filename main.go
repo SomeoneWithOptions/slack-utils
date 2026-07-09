@@ -48,6 +48,7 @@ func main() {
 	var toStr string
 	var out string
 	var limit int
+	var noReplies bool
 	flag.StringVar(&channelID, "channel", "", "Slack channel ID (e.g., C123...)")
 	flag.DurationVar(&delay, "delay", time.Second, "Delay between requests")
 	flag.StringVar(&sinceStr, "since", "", "Only include messages on or after this time (RFC3339, YYYY-MM-DD, or relative duration like 7d/24h)")
@@ -55,11 +56,12 @@ func main() {
 	flag.StringVar(&out, "o", exportFilePath, "Path to write the export JSON")
 	flag.StringVar(&out, "output", exportFilePath, "Path to write the export JSON")
 	flag.IntVar(&limit, "limit", 0, "Maximum number of root messages to export (0 = no limit)")
+	flag.BoolVar(&noReplies, "no-replies", false, "Skip fetching thread replies (export root messages only)")
 	flag.Parse()
 
 	token := strings.TrimSpace(os.Getenv(slackTokenEnv))
 	if channelID == "" {
-		fmt.Fprintln(os.Stderr, "usage: slack-export -channel C123 [-delay 1s] [-since 7d] [-to 2024-05-01] [-limit 50] [-o export.json]")
+		fmt.Fprintln(os.Stderr, "usage: slack-export -channel C123 [-delay 1s] [-since 7d] [-to 2024-05-01] [-limit 50] [-no-replies] [-o export.json]")
 		os.Exit(2)
 	}
 	if token == "" {
@@ -100,6 +102,9 @@ func main() {
 	}
 	if limit > 0 {
 		logf("message limit: %d root messages", limit)
+	}
+	if noReplies {
+		logf("thread replies: disabled (-no-replies)")
 	}
 	logf("export destination: %s", out)
 	logf("user cache file: %s", userCachePath)
@@ -164,33 +169,37 @@ func main() {
 	}
 
 	replyMap := make(map[string][]slack.Message)
-	rootMessages := make([]slack.Message, 0, len(all))
-	for _, m := range all {
-		if m.ThreadTimestamp != "" && m.Timestamp != m.ThreadTimestamp {
-			continue
-		}
-		if m.ReplyCount == 0 && m.ThreadTimestamp == "" {
-			continue
-		}
-		rootMessages = append(rootMessages, m)
-	}
-
-	logf("processing replies for %d root messages", len(rootMessages))
-	for i, m := range rootMessages {
-		ts := threadTimestamp(m)
-		logf("fetching replies for thread %s (%d/%d)", ts, i+1, len(rootMessages))
-		replies := fetchReplies(ctx, api, channelID, ts, delay)
-		if len(replies) > 0 {
-			logf("retrieved %d replies for thread %s", len(replies), ts)
-			replyMap[ts] = replies
-			time.Sleep(delay)
-			if delay > 0 {
-				logf("waiting %s before next thread request", delay)
+	if noReplies {
+		logf("skipping thread reply fetch (-no-replies)")
+	} else {
+		rootMessages := make([]slack.Message, 0, len(all))
+		for _, m := range all {
+			if m.ThreadTimestamp != "" && m.Timestamp != m.ThreadTimestamp {
+				continue
 			}
-		} else {
-			logf("no replies returned for thread %s", ts)
+			if m.ReplyCount == 0 && m.ThreadTimestamp == "" {
+				continue
+			}
+			rootMessages = append(rootMessages, m)
 		}
-		logf("Processed main message %d/%d", i+1, len(rootMessages))
+
+		logf("processing replies for %d root messages", len(rootMessages))
+		for i, m := range rootMessages {
+			ts := threadTimestamp(m)
+			logf("fetching replies for thread %s (%d/%d)", ts, i+1, len(rootMessages))
+			replies := fetchReplies(ctx, api, channelID, ts, delay)
+			if len(replies) > 0 {
+				logf("retrieved %d replies for thread %s", len(replies), ts)
+				replyMap[ts] = replies
+				time.Sleep(delay)
+				if delay > 0 {
+					logf("waiting %s before next thread request", delay)
+				}
+			} else {
+				logf("no replies returned for thread %s", ts)
+			}
+			logf("Processed main message %d/%d", i+1, len(rootMessages))
+		}
 	}
 
 	exp := Export{
