@@ -1,145 +1,80 @@
 # slack-utils
 
-General Slack utility CLI. Today it supports exporting message history for a single Slack channel; the command layout is ready for more Slack utilities under resources like `channels` and `users`.
+A small CLI for exporting Slack conversation history to JSON.
 
-## Sensitive/generated files
+## Setup
 
-The exporter can create local files containing private Slack data:
-
-- `export.json` contains exported channel messages.
-- `users.json` is a local user cache that can contain Slack user IDs and emails.
-
-These files are intentionally ignored by git and excluded from Docker build contexts. Do not commit real exports, caches, or Slack tokens.
-
-## Build the CLI
-
-From the repository root, use the build helper so the binary is compiled with the latest stable Go toolchain published by go.dev:
+Set a Slack API token with access to the conversation you want to export:
 
 ```bash
-./scripts/build-binary
+export SLACK_TOKEN="xoxb-your-token"
 ```
 
-The helper requires Docker and curl, then pulls `golang:<latest>-alpine` before building. To override the output path or pin a version for debugging:
+Required Slack OAuth history scope depends on the conversation ID:
+
+- `C...` public channel: `channels:history`
+- `G...` private channel: `groups:history`
+- `D...` direct message: `im:history`
+- `G...` multi-person DM: `mpim:history`
+
+Optional scopes:
+
+- `users:read` / `users:read.email` to resolve users
+- `channels:read`, `groups:read`, `im:read`, or `mpim:read` to resolve conversation names
+
+## Run
+
+From this repo:
 
 ```bash
-./scripts/build-binary /tmp/slack-utils
-GO_VERSION=1.24.5 ./scripts/build-binary
+go run . channels export -channel C1234567890 -o export.json
 ```
 
-## Build the Docker image
-
-If you want to build the container locally, run the following from the repository root:
+Or build and run the binary:
 
 ```bash
-docker build --pull -t slack-utils .
+go build -o slack-utils .
+./slack-utils channels export -channel C1234567890 -o export.json
 ```
-
-This uses the multi-stage `Dockerfile` in the repo to compile the Go binary with the latest `golang:alpine` base image and package it into a minimal runtime image tagged as `slack-utils`. You can pass `--build-arg GO_IMAGE=golang:<version>-alpine` when a specific compiler image is required.
 
 ## Usage
 
-The CLI uses a resource/action structure:
-
 ```bash
-slack-utils <resource> <action> [flags]
+slack-utils channels export -channel <conversation-id> [flags]
 ```
 
-Current command:
+Examples:
 
 ```bash
+# Export everything, including thread replies, to ./export.json
 slack-utils channels export -channel C1234567890
+
+# Export the last 7 days
+slack-utils channels export -channel C1234567890 -since 7d
+
+# Export a date range
+slack-utils channels export -channel C1234567890 -since 2024-05-01 -to 2024-05-31
+
+# Export only root messages, no thread replies
+slack-utils channels export -channel C1234567890 -no-replies
+
+# Limit root messages and write to a custom file
+slack-utils channels export -channel C1234567890 -limit 50 -o /tmp/export.json
 ```
-
-### Export a channel
-
-1. Set a Slack API token that has access to the target channel:
-
-   ```bash
-   export SLACK_TOKEN=your-slack-token
-   export CHANNEL=C1234567890
-   ```
-
-2. Run the export:
-
-   ```bash
-   slack-utils channels export \
-     -channel "$CHANNEL" \
-     -o /tmp/export.json
-   ```
 
 Useful flags:
 
-```bash
-slack-utils channels export \
-  -channel "$CHANNEL" \
-  -since 7d \
-  -to 2024-05-01 \
-  -limit 50 \
-  -no-replies \
-  -q \
-  -o /tmp/export.json
-```
+| Flag | Description |
+| --- | --- |
+| `-channel` | Slack conversation ID to export. Required. |
+| `-o`, `-output` | Output JSON path. Default: `./export.json`. |
+| `-since` | Start time: RFC3339, `YYYY-MM-DD`, or relative duration like `7d` / `24h`. |
+| `-to` | End time: RFC3339 or `YYYY-MM-DD`. |
+| `-limit` | Maximum root messages to export. `0` means no limit. |
+| `-no-replies` | Skip thread replies. |
+| `-delay` | Delay between Slack API requests. Default: `1s`. |
+| `-q`, `-quiet` | Suppress progress logs. |
 
-### Slack OAuth scopes
+The export is written as JSON with top-level conversation metadata and a `messages` array. Thread replies are nested under each root message in `replies`.
 
-The token in `SLACK_TOKEN` needs the history scope for the conversation type you export:
-
-- Public channel IDs (`C...`): `channels:history`
-- Private channel IDs (`G...`): `groups:history`
-- Direct message IDs (`D...`): `im:history`
-- Multi-person DM IDs (`G...`): `mpim:history`
-
-User email resolution needs `users:read`; add `users:read.email` if you want exported users to be email addresses instead of Slack IDs. Channel name lookup is optional and uses `channels:read`, `groups:read`, `im:read`, or `mpim:read` depending on the conversation type.
-
-When Slack returns `missing_scope`, the CLI prints the Slack API method, the specific missing/required scope when it can determine it, and remediation steps (add scope, reinstall/reauthorize app, update `SLACK_TOKEN`).
-
-### Run with Docker
-
-Create the output file (or make sure it exists) so Docker can bind-mount it:
-
-```bash
-touch /tmp/export.json
-```
-
-Then run:
-
-```bash
-docker run --rm \
-  -e SLACK_TOKEN="$SLACK_TOKEN" \
-  -v /tmp/export.json:/app/export.json \
-  slack-utils \
-  channels export -channel "$CHANNEL"
-```
-
-## Sample export.json output
-
-When the exporter finishes, `/tmp/export.json` will contain a JSON document similar to:
-
-```json
-{
-  "channel_id": "C1234567890",
-  "channel_name": "project-updates",
-  "exported_at": "2024-05-18T12:34:56Z",
-  "messages": [
-    {
-      "user": "alice",
-      "message": "Heads up on today's deploy.",
-      "date": "2024-05-17T16:22:45Z",
-      "replies": [
-        {
-          "user": "bob",
-          "message": "Thanks for the update!",
-          "date": "2024-05-17T16:40:03Z"
-        }
-      ]
-    },
-    {
-      "user": "carol",
-      "message": "Reminder: stand-up moves to 11am tomorrow.",
-      "date": "2024-05-17T18:05:12Z"
-    }
-  ]
-}
-```
-
-The top-level `messages` array includes root messages. Replies are nested inside their parent message under the `replies` field.
+The CLI may also create `users.json` as a local user cache.
