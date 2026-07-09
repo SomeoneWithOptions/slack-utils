@@ -1,4 +1,4 @@
-package main
+package slackerr
 
 import (
 	"reflect"
@@ -9,12 +9,12 @@ import (
 	"github.com/slack-go/slack"
 )
 
-func TestDescribeSlackAPIErrorMissingScopeUsesFallbackScope(t *testing.T) {
+func TestDescribeMissingScopeUsesFallbackScope(t *testing.T) {
 	err := slack.SlackErrorResponse{Err: "missing_scope"}
 
-	got := describeSlackAPIError(err, slackAPIErrorDetails{
+	got := Describe(err, Details{
 		Operation:      "fetch conversation history for C123",
-		Method:         slackMethodConversationsHistory,
+		Method:         MethodConversationsHistory,
 		RequiredScopes: []string{"channels:history"},
 	}).Error()
 
@@ -24,7 +24,7 @@ func TestDescribeSlackAPIErrorMissingScopeUsesFallbackScope(t *testing.T) {
 	assertContains(t, got, "Reinstall or reauthorize")
 }
 
-func TestDescribeSlackAPIErrorMissingScopeUsesSlackMetadata(t *testing.T) {
+func TestDescribeMissingScopeUsesSlackMetadata(t *testing.T) {
 	err := slack.SlackErrorResponse{
 		Err: "missing_scope",
 		ResponseMetadata: slack.ResponseMetadata{
@@ -32,9 +32,9 @@ func TestDescribeSlackAPIErrorMissingScopeUsesSlackMetadata(t *testing.T) {
 		},
 	}
 
-	got := describeSlackAPIError(err, slackAPIErrorDetails{
+	got := Describe(err, Details{
 		Operation:      "fetch conversation history for G123",
-		Method:         slackMethodConversationsHistory,
+		Method:         MethodConversationsHistory,
 		RequiredScopes: []string{"channels:history"},
 	}).Error()
 
@@ -78,18 +78,18 @@ func TestConversationScopesFor(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := conversationScopesFor(tt.channelID, tt.info, "channels:history", "groups:history", "im:history", "mpim:history")
+			got := ConversationScopesFor(tt.channelID, tt.info, "channels:history", "groups:history", "im:history", "mpim:history")
 			if !reflect.DeepEqual(got, tt.want) {
-				t.Fatalf("conversationScopesFor() = %#v, want %#v", got, tt.want)
+				t.Fatalf("ConversationScopesFor() = %#v, want %#v", got, tt.want)
 			}
 		})
 	}
 }
 
-func TestRetryAfterSlackRateLimitedErrorRoundsUp(t *testing.T) {
-	got := retryAfter(&slack.RateLimitedError{RetryAfter: 1500 * time.Millisecond})
+func TestRetryAfterSecondsSlackRateLimitedErrorRoundsUp(t *testing.T) {
+	got := RetryAfterSeconds(&slack.RateLimitedError{RetryAfter: 1500 * time.Millisecond})
 	if got != 2 {
-		t.Fatalf("retryAfter() = %d, want 2", got)
+		t.Fatalf("RetryAfterSeconds() = %d, want 2", got)
 	}
 }
 
