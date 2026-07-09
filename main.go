@@ -47,17 +47,19 @@ func main() {
 	var sinceStr string
 	var toStr string
 	var out string
+	var limit int
 	flag.StringVar(&channelID, "channel", "", "Slack channel ID (e.g., C123...)")
 	flag.DurationVar(&delay, "delay", time.Second, "Delay between requests")
 	flag.StringVar(&sinceStr, "since", "", "Only include messages on or after this time (RFC3339, YYYY-MM-DD, or relative duration like 7d/24h)")
 	flag.StringVar(&toStr, "to", "", "Only include messages on or before this time (RFC3339 or YYYY-MM-DD)")
 	flag.StringVar(&out, "o", exportFilePath, "Path to write the export JSON")
 	flag.StringVar(&out, "output", exportFilePath, "Path to write the export JSON")
+	flag.IntVar(&limit, "limit", 0, "Maximum number of root messages to export (0 = no limit)")
 	flag.Parse()
 
 	token := strings.TrimSpace(os.Getenv(slackTokenEnv))
 	if channelID == "" {
-		fmt.Fprintln(os.Stderr, "usage: slack-export -channel C123 [-delay 1s] [-since 7d] [-to 2024-05-01] [-o export.json]")
+		fmt.Fprintln(os.Stderr, "usage: slack-export -channel C123 [-delay 1s] [-since 7d] [-to 2024-05-01] [-limit 50] [-o export.json]")
 		os.Exit(2)
 	}
 	if token == "" {
@@ -66,6 +68,9 @@ func main() {
 	out = strings.TrimSpace(out)
 	if out == "" {
 		fail(fmt.Errorf("-o/-output path must not be empty"))
+	}
+	if limit < 0 {
+		fail(fmt.Errorf("-limit must be >= 0"))
 	}
 
 	oldest, err := parseTimeBound(sinceStr, false)
@@ -92,6 +97,9 @@ func main() {
 	logf("starting export for channel %s with request delay %s", channelID, delay)
 	if oldest != "" || latest != "" {
 		logf("time range filter: since=%s to=%s", formatBoundForLog(sinceStr, oldest), formatBoundForLog(toStr, latest))
+	}
+	if limit > 0 {
+		logf("message limit: %d root messages", limit)
 	}
 	logf("export destination: %s", out)
 	logf("user cache file: %s", userCachePath)
@@ -121,13 +129,29 @@ func main() {
 	var all []slack.Message
 	cursor := ""
 	for {
-		logf("requesting conversation history (cursor=%q)", cursor)
-		h, err := getHistory(ctx, api, channelID, cursor, oldest, latest)
+		pageLimit := 200
+		if limit > 0 {
+			remaining := limit - countRootMessages(all)
+			if remaining <= 0 {
+				logf("reached message limit of %d root messages; stopping history fetch", limit)
+				break
+			}
+			if remaining < pageLimit {
+				pageLimit = remaining
+			}
+		}
+		logf("requesting conversation history (cursor=%q, limit=%d)", cursor, pageLimit)
+		h, err := getHistory(ctx, api, channelID, cursor, oldest, latest, pageLimit)
 		if err != nil {
 			fail(err)
 		}
 		logf("received %d messages", len(h.Messages))
 		all = append(all, h.Messages...)
+		if limit > 0 && countRootMessages(all) >= limit {
+			all = trimToRootLimit(all, limit)
+			logf("reached message limit of %d root messages; collected %d raw messages", limit, len(all))
+			break
+		}
 		if h.ResponseMetaData.NextCursor == "" {
 			logf("no more history pages; collected %d messages", len(all))
 			break
@@ -195,14 +219,17 @@ func main() {
 	fmt.Println("wrote", out)
 }
 
-func getHistory(ctx context.Context, api *slack.Client, channelID, cursor, oldest, latest string) (*slack.GetConversationHistoryResponse, error) {
+func getHistory(ctx context.Context, api *slack.Client, channelID, cursor, oldest, latest string, limit int) (*slack.GetConversationHistoryResponse, error) {
+	if limit <= 0 {
+		limit = 200
+	}
 	for {
 		h, err := api.GetConversationHistoryContext(ctx, &slack.GetConversationHistoryParameters{
 			ChannelID:          channelID,
 			Cursor:             cursor,
 			Oldest:             oldest,
 			Latest:             latest,
-			Limit:              200,
+			Limit:              limit,
 			IncludeAllMetadata: true,
 			Inclusive:          true,
 		})
@@ -589,6 +616,40 @@ func parseSlackTimestamp(ts string) (time.Time, error) {
 
 func isReply(msg slack.Message) bool {
 	return msg.ThreadTimestamp != "" && msg.Timestamp != msg.ThreadTimestamp
+}
+
+func isRootMessage(msg slack.Message) bool {
+	return !isReply(msg)
+}
+
+func countRootMessages(messages []slack.Message) int {
+	count := 0
+	for _, m := range messages {
+		if isRootMessage(m) {
+			count++
+		}
+	}
+	return count
+}
+
+// trimToRootLimit keeps only the first N root messages (and any non-root
+// messages that appear before that cutoff in the API response order).
+func trimToRootLimit(messages []slack.Message, limit int) []slack.Message {
+	if limit <= 0 {
+		return messages
+	}
+	out := make([]slack.Message, 0, len(messages))
+	roots := 0
+	for _, m := range messages {
+		if isRootMessage(m) {
+			if roots >= limit {
+				break
+			}
+			roots++
+		}
+		out = append(out, m)
+	}
+	return out
 }
 
 func threadTimestamp(msg slack.Message) string {
