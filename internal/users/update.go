@@ -61,7 +61,7 @@ func Update(ctx context.Context, opts UpdateOptions) (UpdateResult, error) {
 		return UpdateResult{}, err
 	}
 	if !exists {
-		return UpdateResult{}, fmt.Errorf("user cache %s does not exist; run `slack-utils users init -output %q` first", path, path)
+		return UpdateResult{}, fmt.Errorf("user cache %s does not exist; run `slack-utils users cache init -output %q` first", path, path)
 	}
 
 	data, err := os.ReadFile(path)

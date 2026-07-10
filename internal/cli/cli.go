@@ -66,14 +66,14 @@ func printRootUsage(out *os.File) {
 	fmt.Fprintf(out, `Slack utilities.
 
 Usage:
-  %[1]s <resource> <action> [flags]
+  %[1]s <command> [subcommand...] [flags]
 
 Commands:
-  %[1]s channels export   Export a channel's message history to JSON
-  %[1]s users init        Initialize users.json with all workspace users
-  %[1]s users update      Add missing workspace users to users.json
+  %[1]s channels export       Export a channel's message history to JSON
+  %[1]s users cache init      Initialize users.json with all workspace users
+  %[1]s users cache update    Add missing workspace users to users.json
 
-Run "%[1]s <resource> <action> -h" for command-specific flags.
+Run "%[1]s <command> [subcommand...] -h" for command-specific help.
 `, cliName)
 }
 
@@ -99,12 +99,10 @@ func runUsersCommand(args []string) {
 	switch args[0] {
 	case "-h", "--help", "help":
 		printUsersUsage(os.Stdout)
-	case "init":
-		runUsersInit(args[1:])
-	case "update":
-		runUsersUpdate(args[1:])
+	case "cache":
+		runUsersCacheCommand(args[1:])
 	default:
-		fmt.Fprintf(os.Stderr, "unknown users action %q\n\n", args[0])
+		fmt.Fprintf(os.Stderr, "unknown users command %q\n\n", args[0])
 		printUsersUsage(os.Stderr)
 		os.Exit(2)
 	}
@@ -114,13 +112,46 @@ func printUsersUsage(out *os.File) {
 	fmt.Fprintf(out, `Slack user utilities.
 
 Usage:
-  %[1]s users <action> [flags]
+  %[1]s users <command> [flags]
+
+Commands:
+  cache    Manage the local workspace user cache
+
+Run "%[1]s users cache -h" for cache actions.
+`, cliName)
+}
+
+func runUsersCacheCommand(args []string) {
+	if len(args) == 0 {
+		printUsersCacheUsage(os.Stderr)
+		os.Exit(2)
+	}
+
+	switch args[0] {
+	case "-h", "--help", "help":
+		printUsersCacheUsage(os.Stdout)
+	case "init":
+		runUsersInit(args[1:])
+	case "update":
+		runUsersUpdate(args[1:])
+	default:
+		fmt.Fprintf(os.Stderr, "unknown users cache action %q\n\n", args[0])
+		printUsersCacheUsage(os.Stderr)
+		os.Exit(2)
+	}
+}
+
+func printUsersCacheUsage(out *os.File) {
+	fmt.Fprintf(out, `Slack user cache utilities.
+
+Usage:
+  %[1]s users cache <action> [flags]
 
 Actions:
   init     Initialize users.json with all workspace users (never overwrites)
   update   Add workspace users missing from an existing users.json
 
-Run "%[1]s users <action> -h" for action-specific flags.
+Run "%[1]s users cache <action> -h" for action-specific flags.
 `, cliName)
 }
 
@@ -131,7 +162,7 @@ func runUsersInit(args []string) {
 		teamID string
 		quiet  bool
 	)
-	fs := flag.NewFlagSet("users init", flag.ContinueOnError)
+	fs := flag.NewFlagSet("users cache init", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	fs.StringVar(&path, "o", users.DefaultCachePath, "Path to create for the user cache")
 	fs.StringVar(&path, "output", users.DefaultCachePath, "Path to create for the user cache")
@@ -140,7 +171,7 @@ func runUsersInit(args []string) {
 	fs.BoolVar(&quiet, "quiet", false, "Suppress progress logs (errors still go to stderr)")
 	fs.BoolVar(&quiet, "q", false, "Suppress progress logs (errors still go to stderr)")
 	fs.Usage = func() {
-		fmt.Fprintf(fs.Output(), "Usage:\n  %s users init [flags]\n\nFlags:\n", cliName)
+		fmt.Fprintf(fs.Output(), "Usage:\n  %s users cache init [flags]\n\nFlags:\n", cliName)
 		fs.PrintDefaults()
 	}
 
@@ -211,7 +242,7 @@ func runUsersUpdate(args []string) {
 		teamID string
 		quiet  bool
 	)
-	fs := flag.NewFlagSet("users update", flag.ContinueOnError)
+	fs := flag.NewFlagSet("users cache update", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	fs.StringVar(&path, "o", users.DefaultCachePath, "Path to the existing user cache")
 	fs.StringVar(&path, "output", users.DefaultCachePath, "Path to the existing user cache")
@@ -220,7 +251,7 @@ func runUsersUpdate(args []string) {
 	fs.BoolVar(&quiet, "quiet", false, "Suppress progress logs (errors still go to stderr)")
 	fs.BoolVar(&quiet, "q", false, "Suppress progress logs (errors still go to stderr)")
 	fs.Usage = func() {
-		fmt.Fprintf(fs.Output(), "Usage:\n  %s users update [flags]\n\nFlags:\n", cliName)
+		fmt.Fprintf(fs.Output(), "Usage:\n  %s users cache update [flags]\n\nFlags:\n", cliName)
 		fs.PrintDefaults()
 	}
 
@@ -252,7 +283,7 @@ func runUsersUpdate(args []string) {
 		applog.Fail(err)
 	}
 	if !exists {
-		applog.Fail(fmt.Errorf("user cache %s does not exist; run `%s users init -output %q` first", path, cliName, path))
+		applog.Fail(fmt.Errorf("user cache %s does not exist; run `%s users cache init -output %q` first", path, cliName, path))
 	}
 
 	token := strings.TrimSpace(os.Getenv(users.DefaultTokenEnv))

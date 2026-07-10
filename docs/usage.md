@@ -40,12 +40,12 @@ After adding scopes to a Slack app, reinstall or reauthorize it for the changes 
 Initialize `users.json` with all users returned by Slack:
 
 ```bash
-slack-utils users init
+slack-utils users cache init
 ```
 
 The command uses cursor pagination, requests at most 200 users per page, and waits three seconds between pages by default. Slack's `users.list` response includes invited and deactivated users, which helps resolve authors in historical exports.
 
-`users init` never overwrites an existing cache. If the destination already exists, it exits successfully without making a Slack API request.
+`users cache init` never overwrites an existing cache. If the destination already exists, it exits successfully without making a Slack API request.
 
 The token requires `users:read`. Add `users:read.email` to store email addresses; when an email is unavailable, the user's Slack ID is stored instead. With an Enterprise Grid organization token, use `-team` to select a workspace.
 
@@ -53,24 +53,24 @@ Examples:
 
 ```bash
 # Write the cache elsewhere
-slack-utils users init -output /path/to/users.json
+slack-utils users cache init -output /path/to/users.json
 
 # Use a more conservative delay between pages
-slack-utils users init -delay 5s
+slack-utils users cache init -delay 5s
 
 # Select a workspace when using an Enterprise Grid organization token
-slack-utils users init -team T1234567890
+slack-utils users cache init -team T1234567890
 ```
 
 Update an existing cache with workspace users whose IDs are not already present:
 
 ```bash
-slack-utils users update
+slack-utils users cache update
 ```
 
-`users update` requires the cache to exist and directs you to `users init` otherwise. It preserves every existing entry and never removes users. It accepts the same `-output`, `-delay`, `-team`, and `-quiet` flags as `users init`.
+`users cache update` requires the cache to exist and directs you to `users cache init` otherwise. It preserves every existing entry and never removes users. It accepts the same `-output`, `-delay`, `-team`, and `-quiet` flags as `users cache init`.
 
-### `users init` flags
+### `users cache init` and `users cache update` flags
 
 | Flag | Default | Description |
 | --- | --- | --- |
@@ -143,7 +143,7 @@ slack-utils channels export \
 
 ### User resolution
 
-Exports use `./users.json` as a local user cache. Run `slack-utils users init` first to populate the complete workspace cache.
+Exports use `./users.json` as a local user cache. Run `slack-utils users cache init` first to populate the complete workspace cache.
 
 During an export, users missing from the cache are requested from Slack and added to it. If a profile email is unavailable, the user's Slack ID is used.
 

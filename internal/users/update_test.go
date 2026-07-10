@@ -17,8 +17,8 @@ import (
 func TestUpdateRequiresExistingCache(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "users.json")
 	_, err := Update(context.Background(), UpdateOptions{Path: path, Log: discardLogger{}})
-	if err == nil || !strings.Contains(err.Error(), "slack-utils users init") {
-		t.Fatalf("Update() error = %v, want users init guidance", err)
+	if err == nil || !strings.Contains(err.Error(), "slack-utils users cache init") {
+		t.Fatalf("Update() error = %v, want users cache init guidance", err)
 	}
 }
 
