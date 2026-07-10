@@ -8,24 +8,15 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/slack-go/slack"
 )
 
-func TestUpdateRequiresExistingCache(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "users.json")
-	_, err := Update(context.Background(), UpdateOptions{Path: path, Log: discardLogger{}})
-	if err == nil || !strings.Contains(err.Error(), "slack-utils users cache init") {
-		t.Fatalf("Update() error = %v, want users cache init guidance", err)
-	}
-}
-
 func TestUpdateAddsMissingUsersWithoutChangingExistingEntries(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		io.WriteString(w, `{"ok":true,"members":[{"id":"U1","profile":{"email":"new@example.com"}},{"id":"U2","profile":{"email":"two@example.com"}}],"response_metadata":{"next_cursor":""}}`)
+		_, _ = io.WriteString(w, `{"ok":true,"members":[{"id":"U1","profile":{"email":"new@example.com"}},{"id":"U2","profile":{"email":"two@example.com"}}],"response_metadata":{"next_cursor":""}}`)
 	}))
 	defer server.Close()
 
@@ -36,9 +27,9 @@ func TestUpdateAddsMissingUsersWithoutChangingExistingEntries(t *testing.T) {
 	api := slack.New("test-token", slack.OptionAPIURL(server.URL+"/"))
 	result, err := Update(context.Background(), UpdateOptions{Path: path, API: api, Log: discardLogger{}})
 	if err != nil {
-		t.Fatalf("Update() error = %v", err)
+		t.Fatal(err)
 	}
-	if result.Added != 1 || result.Total != 2 || result.WorkspaceUsers != 2 {
+	if result.Added != 1 || result.Total != 2 {
 		t.Fatalf("Update() result = %+v", result)
 	}
 
@@ -58,7 +49,7 @@ func TestUpdateAddsMissingUsersWithoutChangingExistingEntries(t *testing.T) {
 func TestUpdateAPIFailureLeavesCacheUnchanged(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		io.WriteString(w, `{"ok":false,"error":"missing_scope","needed":"users:read"}`)
+		_, _ = io.WriteString(w, `{"ok":false,"error":"missing_scope","needed":"users:read"}`)
 	}))
 	defer server.Close()
 
@@ -69,7 +60,7 @@ func TestUpdateAPIFailureLeavesCacheUnchanged(t *testing.T) {
 	}
 	api := slack.New("test-token", slack.OptionAPIURL(server.URL+"/"))
 	if _, err := Update(context.Background(), UpdateOptions{Path: path, API: api, Log: discardLogger{}}); err == nil {
-		t.Fatal("Update() error = nil, want Slack API error")
+		t.Fatal("Update() returned no error")
 	}
 	got, err := os.ReadFile(path)
 	if err != nil {

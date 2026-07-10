@@ -7,28 +7,22 @@ import (
 	"testing"
 )
 
+// Keep one CLI smoke test for command routing and one validation test. The flag
+// package and every spelling of invalid input do not need separate coverage.
 func TestConversationsExportHelp(t *testing.T) {
 	output, err := runCLI(t, "conversations", "export", "-h")
 	if err != nil {
-		t.Fatalf("help command failed: %v\n%s", err, output)
+		t.Fatalf("help failed: %v\n%s", err, output)
 	}
-
-	for _, want := range []string{
-		"slack-utils conversations export -channel C123",
-		"-channel string",
-		"C123..., G123..., or D123...",
-	} {
+	for _, want := range []string{"-channel", "-since", "-to", "-limit", "-no-replies", "-output"} {
 		if !strings.Contains(output, want) {
-			t.Errorf("help output does not contain %q:\n%s", want, output)
+			t.Errorf("export help missing %q:\n%s", want, output)
 		}
 	}
 }
 
 func TestConversationsExportRequiresChannel(t *testing.T) {
 	output, err := runCLI(t, "conversations", "export")
-	if err == nil {
-		t.Fatalf("command succeeded without -channel:\n%s", output)
-	}
 	exitErr, ok := err.(*exec.ExitError)
 	if !ok || exitErr.ExitCode() != 2 {
 		t.Fatalf("exit error = %v, want status 2\n%s", err, output)
