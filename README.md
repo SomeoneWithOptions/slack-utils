@@ -53,7 +53,11 @@ Optionally initialize the workspace user cache before exporting:
 slack-utils users init
 ```
 
-This creates `users.json`, which the exporter uses to resolve Slack user IDs.
+This creates `users.json`, which the exporter uses to resolve Slack user IDs. Later, add newly joined workspace users without changing existing entries:
+
+```bash
+slack-utils users update
+```
 
 ## Documentation
 
@@ -64,4 +68,5 @@ Command-specific help is also available from the CLI:
 ```bash
 slack-utils channels export -h
 slack-utils users init -h
+slack-utils users update -h
 ```

@@ -71,6 +71,7 @@ Usage:
 Commands:
   %[1]s channels export   Export a channel's message history to JSON
   %[1]s users init        Initialize users.json with all workspace users
+  %[1]s users update      Add missing workspace users to users.json
 
 Run "%[1]s <resource> <action> -h" for command-specific flags.
 `, cliName)
@@ -100,6 +101,8 @@ func runUsersCommand(args []string) {
 		printUsersUsage(os.Stdout)
 	case "init":
 		runUsersInit(args[1:])
+	case "update":
+		runUsersUpdate(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "unknown users action %q\n\n", args[0])
 		printUsersUsage(os.Stderr)
@@ -114,9 +117,10 @@ Usage:
   %[1]s users <action> [flags]
 
 Actions:
-  init   Initialize users.json with all workspace users (never overwrites)
+  init     Initialize users.json with all workspace users (never overwrites)
+  update   Add workspace users missing from an existing users.json
 
-Run "%[1]s users init -h" for init flags.
+Run "%[1]s users <action> -h" for action-specific flags.
 `, cliName)
 }
 
@@ -198,6 +202,87 @@ func runUsersInit(args []string) {
 	if !result.AlreadyExists {
 		fmt.Printf("wrote %s (%d users)\n", path, result.Users)
 	}
+}
+
+func runUsersUpdate(args []string) {
+	var (
+		path   string
+		delay  time.Duration
+		teamID string
+		quiet  bool
+	)
+	fs := flag.NewFlagSet("users update", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	fs.StringVar(&path, "o", users.DefaultCachePath, "Path to the existing user cache")
+	fs.StringVar(&path, "output", users.DefaultCachePath, "Path to the existing user cache")
+	fs.DurationVar(&delay, "delay", users.DefaultInitDelay, "Delay between users.list pages")
+	fs.StringVar(&teamID, "team", "", "Workspace team ID (required only for Enterprise Grid org tokens)")
+	fs.BoolVar(&quiet, "quiet", false, "Suppress progress logs (errors still go to stderr)")
+	fs.BoolVar(&quiet, "q", false, "Suppress progress logs (errors still go to stderr)")
+	fs.Usage = func() {
+		fmt.Fprintf(fs.Output(), "Usage:\n  %s users update [flags]\n\nFlags:\n", cliName)
+		fs.PrintDefaults()
+	}
+
+	if hasHelpArg(args) {
+		fs.SetOutput(os.Stdout)
+		fs.Usage()
+		return
+	}
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
+	if fs.NArg() > 0 {
+		fmt.Fprintf(os.Stderr, "unexpected argument %q\n\n", fs.Arg(0))
+		fs.Usage()
+		os.Exit(2)
+	}
+	path = strings.TrimSpace(path)
+	if path == "" {
+		applog.Fail(fmt.Errorf("-o/-output path must not be empty"))
+	}
+	if delay < 0 {
+		applog.Fail(fmt.Errorf("-delay must be >= 0"))
+	}
+
+	logger := applog.New()
+	logger.Quiet = quiet
+	exists, err := users.CacheExists(path)
+	if err != nil {
+		applog.Fail(err)
+	}
+	if !exists {
+		applog.Fail(fmt.Errorf("user cache %s does not exist; run `%s users init -output %q` first", path, cliName, path))
+	}
+
+	token := strings.TrimSpace(os.Getenv(users.DefaultTokenEnv))
+	if token == "" {
+		applog.Fail(fmt.Errorf("environment variable %s must be set to a Slack token with users:read (and users:read.email for emails)", users.DefaultTokenEnv))
+	}
+
+	retryConfig := slack.DefaultRetryConfig()
+	retryConfig.MaxRetries = 3
+	retryConfig.Handlers = append(slack.ConnectionOnlyRetryHandlers(), slack.NewServerErrorRetryHandler(retryConfig))
+	api := slack.New(token, slack.OptionRetryConfig(retryConfig))
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
+	result, err := users.Update(ctx, users.UpdateOptions{
+		Path:     path,
+		Delay:    delay,
+		TeamID:   teamID,
+		TokenEnv: users.DefaultTokenEnv,
+		API:      api,
+		Log:      logger,
+	})
+	if err != nil {
+		applog.Fail(err)
+	}
+	if result.Added == 0 {
+		fmt.Printf("user cache %s is already up to date (%d users)\n", path, result.Total)
+		return
+	}
+	fmt.Printf("updated %s (%d users added, %d total)\n", path, result.Added, result.Total)
 }
 
 func runChannelsExport(args []string) {

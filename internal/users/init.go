@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/SomeoneWithOptions/slack-utils/internal/applog"
-	"github.com/SomeoneWithOptions/slack-utils/internal/slackerr"
 	"github.com/slack-go/slack"
 )
 
@@ -23,7 +22,6 @@ const (
 	// DefaultInitDelay conservatively keeps users.list at Slack's documented
 	// Tier 2 baseline of at least 20 requests per minute.
 	DefaultInitDelay = 3 * time.Second
-	userPageLimit    = 200
 )
 
 // InitOptions configures first-time population of a user cache.
@@ -96,65 +94,23 @@ func Initialize(ctx context.Context, opts InitOptions) (InitResult, error) {
 		return InitResult{}, fmt.Errorf("Slack client is required to initialize %s", path)
 	}
 
-	cache := make(map[string]string)
-	result := InitResult{}
-	paginationOptions := []slack.GetUsersOption{slack.GetUsersOptionLimit(userPageLimit)}
-	if teamID := strings.TrimSpace(opts.TeamID); teamID != "" {
-		paginationOptions = append(paginationOptions, slack.GetUsersOptionTeamID(teamID))
+	listed, err := listWorkspaceUsers(ctx, workspaceListOptions{
+		delay:    opts.Delay,
+		teamID:   opts.TeamID,
+		tokenEnv: opts.TokenEnv,
+		api:      opts.API,
+		log:      opts.Log,
+		wait:     opts.wait,
+	})
+	if err != nil {
+		return InitResult{}, err
 	}
-	page := opts.API.GetUsersPaginated(paginationOptions...)
-
-	for {
-		opts.Log.Logf("requesting Slack users page %d (cursor=%q, limit=%d)", result.Pages+1, page.Cursor, userPageLimit)
-		next, err := page.Next(ctx)
-		if retryAfter := slackerr.RetryAfterSeconds(err); retryAfter > 0 {
-			delay := time.Duration(retryAfter) * time.Second
-			opts.Log.Logf("rate limited by users.list; retrying the same page in %s", delay)
-			if err := opts.wait(ctx, delay); err != nil {
-				return InitResult{}, fmt.Errorf("wait to retry Slack users list: %w", err)
-			}
-			continue
-		}
-		if err != nil {
-			return InitResult{}, slackerr.Describe(err, slackerr.Details{
-				Operation:      "list Slack workspace users",
-				Method:         slackerr.MethodUsersList,
-				RequiredScopes: []string{"users:read"},
-				TokenEnv:       opts.TokenEnv,
-				Hints: []string{
-					"To cache email addresses, also add the users:read.email scope.",
-					"When using an Enterprise Grid org token, pass -team with the workspace team ID.",
-				},
-			})
-		}
-
-		page = next
-		result.Pages++
-		for _, user := range page.Users {
-			if user.ID == "" {
-				continue
-			}
-			identity := user.Profile.Email
-			if identity == "" {
-				identity = user.ID
-				result.MissingEmails++
-			}
-			cache[user.ID] = identity
-		}
-		opts.Log.Logf("received %d users on page %d (%d unique users total)", len(page.Users), result.Pages, len(cache))
-
-		if page.Cursor == "" {
-			break
-		}
-		if opts.Delay > 0 {
-			opts.Log.Logf("waiting %s before the next users.list request", opts.Delay)
-			if err := opts.wait(ctx, opts.Delay); err != nil {
-				return InitResult{}, fmt.Errorf("wait before next Slack users page: %w", err)
-			}
-		}
+	cache := listed.users
+	result := InitResult{
+		Users:         len(cache),
+		Pages:         listed.pages,
+		MissingEmails: listed.missingEmails,
 	}
-
-	result.Users = len(cache)
 	if result.MissingEmails > 0 {
 		applog.Warn(fmt.Errorf("%d Slack user profiles did not include an email and were cached by user ID; email access requires both users:read and users:read.email, followed by reinstalling or reauthorizing the Slack app", result.MissingEmails))
 	}

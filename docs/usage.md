@@ -62,6 +62,14 @@ slack-utils users init -delay 5s
 slack-utils users init -team T1234567890
 ```
 
+Update an existing cache with workspace users whose IDs are not already present:
+
+```bash
+slack-utils users update
+```
+
+`users update` requires the cache to exist and directs you to `users init` otherwise. It preserves every existing entry and never removes users. It accepts the same `-output`, `-delay`, `-team`, and `-quiet` flags as `users init`.
+
 ### `users init` flags
 
 | Flag | Default | Description |
