@@ -1,12 +1,17 @@
 name: Release
 
-"on":
+on:
   push:
     tags:
       - "v*"
 
+# Least privilege by default; publish elevates only what it needs.
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 env:
   APP_NAME: slack-utils
@@ -16,62 +21,56 @@ jobs:
   validate-tag:
     name: Validate release tag
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     outputs:
-      tag: ${{ steps.tag.outputs.tag }}
+      tag: ${{ steps.meta.outputs.tag }}
     steps:
       - name: Check out source
         uses: actions/checkout@v7.0.0
         with:
           fetch-depth: 0
-
-      - name: Export tag name
-        id: tag
-        run: echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          persist-credentials: false
 
       - name: Ensure tag points at release branch HEAD
-        shell: bash
+        id: meta
+        env:
+          TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
 
-          git fetch --force origin "+refs/heads/${RELEASE_BRANCH}:refs/remotes/origin/${RELEASE_BRANCH}"
+          git fetch --force origin \
+            "+refs/heads/${RELEASE_BRANCH}:refs/remotes/origin/${RELEASE_BRANCH}"
 
-          tag_commit="$(git rev-list -n 1 "${GITHUB_REF_NAME}")"
+          tag_commit="$(git rev-list -n 1 "$TAG")"
           release_commit="$(git rev-parse "refs/remotes/origin/${RELEASE_BRANCH}")"
 
           if [ "$tag_commit" != "$release_commit" ]; then
-            echo "::error::Tag ${GITHUB_REF_NAME} points to ${tag_commit}, but origin/${RELEASE_BRANCH} is ${release_commit}. Tag the current ${RELEASE_BRANCH} branch HEAD to publish a release."
+            echo "::error::Tag ${TAG} points to ${tag_commit}, but origin/${RELEASE_BRANCH} is ${release_commit}. Tag the current ${RELEASE_BRANCH} branch HEAD to publish a release."
             exit 1
           fi
+
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
 
   build:
     name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
     needs: validate-tag
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
         include:
-          - goos: linux
-            goarch: amd64
-            archive: tar.gz
-          - goos: linux
-            goarch: arm64
-            archive: tar.gz
-          - goos: darwin
-            goarch: amd64
-            archive: tar.gz
-          - goos: darwin
-            goarch: arm64
-            archive: tar.gz
-          - goos: windows
-            goarch: amd64
-            archive: zip
-          - goos: windows
-            goarch: arm64
-            archive: zip
+          - { goos: linux,   goarch: amd64, archive: tar.gz }
+          - { goos: linux,   goarch: arm64, archive: tar.gz }
+          - { goos: darwin,  goarch: amd64, archive: tar.gz }
+          - { goos: darwin,  goarch: arm64, archive: tar.gz }
+          - { goos: windows, goarch: amd64, archive: zip }
+          - { goos: windows, goarch: arm64, archive: zip }
     steps:
       - name: Check out source
         uses: actions/checkout@v7.0.0
+        with:
+          persist-credentials: false
 
       - name: Set up Go
         uses: actions/setup-go@v6.5.0
@@ -80,18 +79,18 @@ jobs:
           cache: true
 
       - name: Build archive
-        shell: bash
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
-          CGO_ENABLED: 0
+          CGO_ENABLED: "0"
+          ARCHIVE: ${{ matrix.archive }}
         run: |
           set -euo pipefail
 
           package_dir="build/package"
           dist_dir="dist"
           binary="${APP_NAME}"
-          asset="${APP_NAME}_${GOOS}_${GOARCH}.${{ matrix.archive }}"
+          asset="${APP_NAME}_${GOOS}_${GOARCH}.${ARCHIVE}"
 
           if [ "$GOOS" = "windows" ]; then
             binary="${binary}.exe"
@@ -100,13 +99,18 @@ jobs:
           rm -rf build "$dist_dir"
           mkdir -p "$package_dir" "$dist_dir"
 
-          go build -trimpath -ldflags="-s -w" -o "${package_dir}/${binary}" .
+          go build \
+            -trimpath \
+            -ldflags="-s -w" \
+            -o "${package_dir}/${binary}" \
+            .
+
           cp README.md "$package_dir/"
           if [ -f LICENSE ]; then
             cp LICENSE "$package_dir/"
           fi
 
-          if [ "${{ matrix.archive }}" = "zip" ]; then
+          if [ "$ARCHIVE" = "zip" ]; then
             (cd "$package_dir" && zip -q -r "../../${dist_dir}/${asset}" .)
           else
             tar -C "$package_dir" -czf "${dist_dir}/${asset}" .
@@ -118,6 +122,8 @@ jobs:
           name: ${{ env.APP_NAME }}_${{ matrix.goos }}_${{ matrix.goarch }}
           path: dist/*
           if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
 
   publish:
     name: Publish GitHub Release
@@ -125,9 +131,14 @@ jobs:
       - validate-tag
       - build
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
     steps:
       - name: Check out source
         uses: actions/checkout@v7.0.0
+        with:
+          persist-credentials: false
 
       - name: Download build artifacts
         uses: actions/download-artifact@v8.0.1
@@ -136,12 +147,14 @@ jobs:
           merge-multiple: true
 
       - name: Add checksums and installer scripts
-        shell: bash
         run: |
           set -euo pipefail
 
           cp install.sh install.ps1 dist/
-          (cd dist && sha256sum ${APP_NAME}_* install.sh install.ps1 > checksums.txt)
+          (
+            cd dist
+            sha256sum "${APP_NAME}_"* install.sh install.ps1 > checksums.txt
+          )
 
       - name: Create or update release
         uses: softprops/action-gh-release@v3.0.1
@@ -149,4 +162,5 @@ jobs:
           tag_name: ${{ needs.validate-tag.outputs.tag }}
           name: ${{ env.APP_NAME }} ${{ needs.validate-tag.outputs.tag }}
           generate_release_notes: true
+          make_latest: true
           files: dist/*
