@@ -24,27 +24,27 @@ Set a Slack API token that can access the conversation:
 export SLACK_TOKEN="xoxb-your-token"
 ```
 
-Export a channel to `export.json`:
+Export a conversation to `export.json`:
 
 ```bash
-slack-utils channels export -channel C1234567890
+slack-utils conversations export -channel C1234567890
 ```
 
 A few common variations:
 
 ```bash
 # Export the last seven days
-slack-utils channels export -channel C1234567890 -since 7d
+slack-utils conversations export -channel C1234567890 -since 7d
 
 # Export a date range to a custom file
-slack-utils channels export \
+slack-utils conversations export \
   -channel C1234567890 \
   -since 2024-05-01 \
   -to 2024-05-31 \
   -o may-2024.json
 
 # Export root messages without thread replies
-slack-utils channels export -channel C1234567890 -no-replies
+slack-utils conversations export -channel C1234567890 -no-replies
 ```
 
 Optionally initialize the workspace user cache before exporting:
@@ -66,7 +66,7 @@ See [docs/usage.md](docs/usage.md) for token scopes, all command flags, time fil
 Command-specific help is also available from the CLI:
 
 ```bash
-slack-utils channels export -h
+slack-utils conversations export -h
 slack-utils users cache init -h
 slack-utils users cache update -h
 ```

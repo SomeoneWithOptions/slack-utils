@@ -1,4 +1,4 @@
-// Command slack-utils is a small CLI for Slack utilities such as channel export.
+// Command slack-utils is a small CLI for Slack utilities such as conversation export.
 package main
 
 import (

@@ -31,26 +31,27 @@ type Logger interface {
 	Logf(format string, args ...any)
 }
 
-// Options configures a channel history export.
+// Options configures a conversation history export.
 type Options struct {
-	ChannelID     string
-	Delay         time.Duration
-	Since         string
-	To            string
-	Output        string
-	Limit         int
-	NoReplies     bool
-	UserCachePath string
-	TokenEnv      string
-	Log           Logger
+	ConversationID string
+	Delay          time.Duration
+	Since          string
+	To             string
+	Output         string
+	Limit          int
+	NoReplies      bool
+	UserCachePath  string
+	TokenEnv       string
+	Log            Logger
 }
 
-// Result is the on-disk export schema.
+// Result is the on-disk export schema. The channel_* JSON keys are retained
+// for compatibility with existing exports.
 type Result struct {
-	ChannelID   string    `json:"channel_id"`
-	ChannelName string    `json:"channel_name"`
-	ExportedAt  time.Time `json:"exported_at"`
-	Messages    []Message `json:"messages"`
+	ConversationID   string    `json:"channel_id"`
+	ConversationName string    `json:"channel_name"`
+	ExportedAt       time.Time `json:"exported_at"`
+	Messages         []Message `json:"messages"`
 }
 
 // Message is a simplified Slack message with optional nested replies.
@@ -66,7 +67,7 @@ type SenderResolver interface {
 	Lookup(userID string) string
 }
 
-// Run exports channel history according to opts and writes the result JSON.
+// Run exports conversation history according to opts and writes the result JSON.
 // On fatal failure it prints a diagnostic and exits the process, matching CLI
 // behavior of the original single-file implementation.
 func Run(opts Options) {
@@ -112,7 +113,7 @@ func Run(opts Options) {
 	ctx := context.Background()
 	log := opts.Log
 
-	log.Logf("starting export for channel %s with request delay %s", opts.ChannelID, opts.Delay)
+	log.Logf("starting export for conversation %s with request delay %s", opts.ConversationID, opts.Delay)
 	if oldest != "" || latest != "" {
 		log.Logf("time range filter: since=%s to=%s", timestamp.FormatBoundForLog(opts.Since, oldest), timestamp.FormatBoundForLog(opts.To, latest))
 	}
@@ -135,29 +136,29 @@ func Run(opts Options) {
 		}
 	}()
 
-	info, err := api.GetConversationInfoContext(ctx, &slack.GetConversationInfoInput{ChannelID: opts.ChannelID, IncludeLocale: false})
-	channelName := ""
+	info, err := api.GetConversationInfoContext(ctx, &slack.GetConversationInfoInput{ChannelID: opts.ConversationID, IncludeLocale: false})
+	conversationName := ""
 	if err != nil {
 		applog.Warn(slackerr.Describe(err, slackerr.Details{
-			Operation:      fmt.Sprintf("resolve channel information for %s", opts.ChannelID),
+			Operation:      fmt.Sprintf("resolve conversation information for %s", opts.ConversationID),
 			Method:         slackerr.MethodConversationsInfo,
-			RequiredScopes: slackerr.ConversationScopesFor(opts.ChannelID, nil, "channels:read", "groups:read", "im:read", "mpim:read"),
+			RequiredScopes: slackerr.ConversationScopesFor(opts.ConversationID, nil, "channels:read", "groups:read", "im:read", "mpim:read"),
 			TokenEnv:       opts.TokenEnv,
 			Hints: append([]string{
-				"Channel name lookup is optional; export will continue with only the channel ID.",
-			}, slackerr.ConversationScopeHints(opts.ChannelID, "groups:read", "mpim:read")...),
+				"Conversation name lookup is optional; export will continue with only the conversation ID.",
+			}, slackerr.ConversationScopeHints(opts.ConversationID, "groups:read", "mpim:read")...),
 		}))
 	} else if info != nil {
-		channelName = info.Name
-		if channelName != "" {
-			log.Logf("resolved channel name: %s", channelName)
+		conversationName = info.Name
+		if conversationName != "" {
+			log.Logf("resolved conversation name: %s", conversationName)
 		} else {
-			log.Logf("channel information retrieved without a name")
+			log.Logf("conversation information retrieved without a name")
 		}
 	} else {
-		log.Logf("could not retrieve channel info, continuing with ID only")
+		log.Logf("could not retrieve conversation info, continuing with ID only")
 	}
-	historyScopes := slackerr.ConversationScopesFor(opts.ChannelID, info, "channels:history", "groups:history", "im:history", "mpim:history")
+	historyScopes := slackerr.ConversationScopesFor(opts.ConversationID, info, "channels:history", "groups:history", "im:history", "mpim:history")
 
 	var all []slack.Message
 	cursor := ""
@@ -174,18 +175,18 @@ func Run(opts Options) {
 			}
 		}
 		log.Logf("requesting conversation history (cursor=%q, limit=%d)", cursor, pageLimit)
-		h, err := getHistory(ctx, api, opts.ChannelID, cursor, oldest, latest, pageLimit, log)
+		h, err := getHistory(ctx, api, opts.ConversationID, cursor, oldest, latest, pageLimit, log)
 		if err != nil {
 			applog.Fail(slackerr.Describe(err, slackerr.Details{
-				Operation:      fmt.Sprintf("fetch conversation history for %s", opts.ChannelID),
+				Operation:      fmt.Sprintf("fetch conversation history for %s", opts.ConversationID),
 				Method:         slackerr.MethodConversationsHistory,
 				RequiredScopes: historyScopes,
 				TokenEnv:       opts.TokenEnv,
-				Hints:          slackerr.ConversationScopeHints(opts.ChannelID, "groups:history", "mpim:history"),
+				Hints:          slackerr.ConversationScopeHints(opts.ConversationID, "groups:history", "mpim:history"),
 			}))
 		}
 		if h == nil {
-			applog.Fail(fmt.Errorf("fetch conversation history for %s failed: Slack returned an empty response", opts.ChannelID))
+			applog.Fail(fmt.Errorf("fetch conversation history for %s failed: Slack returned an empty response", opts.ConversationID))
 		}
 		log.Logf("received %d messages", len(h.Messages))
 		all = append(all, h.Messages...)
@@ -224,7 +225,7 @@ func Run(opts Options) {
 		for i, m := range rootMessages {
 			ts := threadTimestamp(m)
 			log.Logf("fetching replies for thread %s (%d/%d)", ts, i+1, len(rootMessages))
-			replies, err := fetchReplies(ctx, api, opts.ChannelID, ts, opts.Delay, historyScopes, opts.TokenEnv, log)
+			replies, err := fetchReplies(ctx, api, opts.ConversationID, ts, opts.Delay, historyScopes, opts.TokenEnv, log)
 			if err != nil {
 				applog.Fail(err)
 			}
@@ -247,10 +248,10 @@ func Run(opts Options) {
 	}
 
 	exp := Result{
-		ChannelID:   opts.ChannelID,
-		ChannelName: channelName,
-		ExportedAt:  time.Now().UTC(),
-		Messages:    buildSimpleMessages(all, replyMap, resolver),
+		ConversationID:   opts.ConversationID,
+		ConversationName: conversationName,
+		ExportedAt:       time.Now().UTC(),
+		Messages:         buildSimpleMessages(all, replyMap, resolver),
 	}
 
 	if dir := filepath.Dir(out); dir != "." && dir != "" {
@@ -312,13 +313,13 @@ func collectResolvableUserIDs(messages []slack.Message, replyMap map[string][]sl
 	return ids
 }
 
-func getHistory(ctx context.Context, api *slack.Client, channelID, cursor, oldest, latest string, limit int, log Logger) (*slack.GetConversationHistoryResponse, error) {
+func getHistory(ctx context.Context, api *slack.Client, conversationID, cursor, oldest, latest string, limit int, log Logger) (*slack.GetConversationHistoryResponse, error) {
 	if limit <= 0 {
 		limit = 200
 	}
 	for {
 		h, err := api.GetConversationHistoryContext(ctx, &slack.GetConversationHistoryParameters{
-			ChannelID:          channelID,
+			ChannelID:          conversationID,
 			Cursor:             cursor,
 			Oldest:             oldest,
 			Latest:             latest,
@@ -338,7 +339,7 @@ func getHistory(ctx context.Context, api *slack.Client, channelID, cursor, oldes
 	}
 }
 
-func fetchReplies(ctx context.Context, api *slack.Client, channelID, ts string, delay time.Duration, expectedScopes []string, tokenEnv string, log Logger) ([]slack.Message, error) {
+func fetchReplies(ctx context.Context, api *slack.Client, conversationID, ts string, delay time.Duration, expectedScopes []string, tokenEnv string, log Logger) ([]slack.Message, error) {
 	var out []slack.Message
 	cursor := ""
 	for {
@@ -351,7 +352,7 @@ func fetchReplies(ctx context.Context, api *slack.Client, channelID, ts string, 
 		for {
 			log.Logf("requesting replies for thread %s (cursor=%q)", ts, cursor)
 			resp, hasMore, next, err = api.GetConversationRepliesContext(ctx, &slack.GetConversationRepliesParameters{
-				ChannelID:          channelID,
+				ChannelID:          conversationID,
 				Timestamp:          ts,
 				Cursor:             cursor,
 				Limit:              200,
@@ -366,11 +367,11 @@ func fetchReplies(ctx context.Context, api *slack.Client, channelID, ts string, 
 			if err != nil {
 				log.Logf("failed to fetch replies for thread %s: %v", ts, err)
 				return out, slackerr.Describe(err, slackerr.Details{
-					Operation:      fmt.Sprintf("fetch replies for thread %s in channel %s", ts, channelID),
+					Operation:      fmt.Sprintf("fetch replies for thread %s in conversation %s", ts, conversationID),
 					Method:         slackerr.MethodConversationsReplies,
 					RequiredScopes: expectedScopes,
 					TokenEnv:       tokenEnv,
-					Hints: append(slackerr.ConversationScopeHints(channelID, "groups:history", "mpim:history"),
+					Hints: append(slackerr.ConversationScopeHints(conversationID, "groups:history", "mpim:history"),
 						"If you only need root messages, rerun with -no-replies to skip thread reply requests.",
 					),
 				})

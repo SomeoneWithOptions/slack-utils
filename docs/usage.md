@@ -82,43 +82,43 @@ slack-utils users cache update
 ## Exporting a conversation
 
 ```bash
-slack-utils channels export -channel <conversation-id> [flags]
+slack-utils conversations export -channel <conversation-id> [flags]
 ```
 
-By default, the command exports all available root messages and thread replies to `./export.json`.
+The `-channel` value may identify a public channel (`C...`), private channel or multi-person DM (`G...`), or direct message (`D...`). By default, the command exports all available root messages and thread replies to `./export.json`.
 
 Examples:
 
 ```bash
 # Export all available history, including thread replies
-slack-utils channels export -channel C1234567890
+slack-utils conversations export -channel C1234567890
 
 # Export the last seven days
-slack-utils channels export -channel C1234567890 -since 7d
+slack-utils conversations export -channel C1234567890 -since 7d
 
 # Export messages on one UTC calendar date
-slack-utils channels export \
+slack-utils conversations export \
   -channel C1234567890 \
   -since 2024-05-01 \
   -to 2024-05-01
 
 # Export a precise time range
-slack-utils channels export \
+slack-utils conversations export \
   -channel C1234567890 \
   -since 2024-05-01T09:00:00Z \
   -to 2024-05-01T17:00:00Z
 
 # Export only root messages
-slack-utils channels export -channel C1234567890 -no-replies
+slack-utils conversations export -channel C1234567890 -no-replies
 
 # Limit the number of root messages and choose an output file
-slack-utils channels export \
+slack-utils conversations export \
   -channel C1234567890 \
   -limit 50 \
   -o /tmp/export.json
 ```
 
-### `channels export` flags
+### `conversations export` flags
 
 | Flag | Default | Description |
 | --- | --- | --- |
@@ -149,7 +149,7 @@ During an export, users missing from the cache are requested from Slack and adde
 
 ### Output format
 
-The output is JSON containing conversation metadata and a `messages` array. Replies are nested under their root message:
+The output is JSON containing conversation metadata and a `messages` array. The legacy `channel_id` and `channel_name` keys are retained for output compatibility across all conversation types. Replies are nested under their root message:
 
 ```json
 {
@@ -178,14 +178,14 @@ The output is JSON containing conversation metadata and a `messages` array. Repl
 Run directly from the repository:
 
 ```bash
-go run . channels export -channel C1234567890 -o export.json
+go run . conversations export -channel C1234567890 -o export.json
 ```
 
 Or build a local binary:
 
 ```bash
 go build -o slack-utils .
-./slack-utils channels export -channel C1234567890 -o export.json
+./slack-utils conversations export -channel C1234567890 -o export.json
 ```
 
 ## Releasing

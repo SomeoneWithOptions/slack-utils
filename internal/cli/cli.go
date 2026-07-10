@@ -28,14 +28,14 @@ func Run(args []string) {
 	switch args[0] {
 	case "-h", "--help", "help":
 		printRootUsage(os.Stdout)
-	case "channels", "channel":
-		runChannelsCommand(args[1:])
+	case "conversations":
+		runConversationsCommand(args[1:])
 	case "users", "user":
 		runUsersCommand(args[1:])
 	default:
 		if strings.HasPrefix(args[0], "-") {
-			fmt.Fprintf(os.Stderr, "root-level export flags are deprecated; use `%s channels export` instead.\n\n", cliName)
-			runChannelsExport(args)
+			fmt.Fprintf(os.Stderr, "root-level export flags are deprecated; use `%s conversations export` instead.\n\n", cliName)
+			runConversationsExport(args)
 			return
 		}
 		fmt.Fprintf(os.Stderr, "unknown command %q\n\n", args[0])
@@ -44,20 +44,20 @@ func Run(args []string) {
 	}
 }
 
-func runChannelsCommand(args []string) {
+func runConversationsCommand(args []string) {
 	if len(args) == 0 {
-		printChannelsUsage(os.Stderr)
+		printConversationsUsage(os.Stderr)
 		os.Exit(2)
 	}
 
 	switch args[0] {
 	case "-h", "--help", "help":
-		printChannelsUsage(os.Stdout)
+		printConversationsUsage(os.Stdout)
 	case "export":
-		runChannelsExport(args[1:])
+		runConversationsExport(args[1:])
 	default:
-		fmt.Fprintf(os.Stderr, "unknown channels action %q\n\n", args[0])
-		printChannelsUsage(os.Stderr)
+		fmt.Fprintf(os.Stderr, "unknown conversations action %q\n\n", args[0])
+		printConversationsUsage(os.Stderr)
 		os.Exit(2)
 	}
 }
@@ -69,7 +69,7 @@ Usage:
   %[1]s <command> [subcommand...] [flags]
 
 Commands:
-  %[1]s channels export       Export a channel's message history to JSON
+  %[1]s conversations export  Export a conversation's message history to JSON
   %[1]s users cache init      Initialize users.json with all workspace users
   %[1]s users cache update    Add missing workspace users to users.json
 
@@ -77,16 +77,16 @@ Run "%[1]s <command> [subcommand...] -h" for command-specific help.
 `, cliName)
 }
 
-func printChannelsUsage(out *os.File) {
-	fmt.Fprintf(out, `Slack channel utilities.
+func printConversationsUsage(out *os.File) {
+	fmt.Fprintf(out, `Slack conversation utilities.
 
 Usage:
-  %[1]s channels <action> [flags]
+  %[1]s conversations <action> [flags]
 
 Actions:
-  export   Export a channel's message history to JSON
+  export   Export one conversation's message history and thread replies to simplified JSON
 
-Run "%[1]s channels export -h" for export flags.
+Run "%[1]s conversations export -h" for export flags.
 `, cliName)
 }
 
@@ -316,14 +316,14 @@ func runUsersUpdate(args []string) {
 	fmt.Printf("updated %s (%d users added, %d total)\n", path, result.Added, result.Total)
 }
 
-func runChannelsExport(args []string) {
+func runConversationsExport(args []string) {
 	var (
 		opts  export.Options
 		quiet bool
 	)
-	fs := flag.NewFlagSet("channels export", flag.ContinueOnError)
+	fs := flag.NewFlagSet("conversations export", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
-	fs.StringVar(&opts.ChannelID, "channel", "", "Slack channel ID (e.g., C123...)")
+	fs.StringVar(&opts.ConversationID, "channel", "", "Slack conversation ID (e.g., C123..., G123..., or D123...)")
 	fs.DurationVar(&opts.Delay, "delay", time.Second, "Delay between requests")
 	fs.StringVar(&opts.Since, "since", "", "Only include messages on or after this time (RFC3339, YYYY-MM-DD, or relative duration like 7d/24h)")
 	fs.StringVar(&opts.To, "to", "", "Only include messages on or before this time (RFC3339 or YYYY-MM-DD)")
@@ -334,7 +334,7 @@ func runChannelsExport(args []string) {
 	fs.BoolVar(&quiet, "quiet", false, "Suppress progress logs (errors still go to stderr)")
 	fs.BoolVar(&quiet, "q", false, "Suppress progress logs (errors still go to stderr)")
 	fs.Usage = func() {
-		fmt.Fprintf(fs.Output(), "Usage:\n  %s channels export -channel C123 [flags]\n\nFlags:\n", cliName)
+		fmt.Fprintf(fs.Output(), "Usage:\n  %s conversations export -channel C123 [flags]\n\nFlags:\n", cliName)
 		fs.PrintDefaults()
 	}
 
@@ -351,7 +351,7 @@ func runChannelsExport(args []string) {
 		fs.Usage()
 		os.Exit(2)
 	}
-	if opts.ChannelID == "" {
+	if opts.ConversationID == "" {
 		fmt.Fprint(os.Stderr, "-channel is required\n\n")
 		fs.Usage()
 		os.Exit(2)

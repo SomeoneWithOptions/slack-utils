@@ -142,12 +142,12 @@ func (e *apiError) hints(code string, isSlackErr bool) []string {
 		)
 	case "channel_not_found":
 		hints = append(hints,
-			"Verify -channel is a Slack channel ID such as C..., G..., or D... (not the channel name).",
-			"Make sure the token can access the conversation; invite the app/user to the channel when needed.",
+			"Verify -channel is a Slack conversation ID such as C..., G..., or D... (not a conversation name).",
+			"Make sure the token can access the conversation; invite the app/user when needed.",
 		)
 	case "not_in_channel":
 		hints = append(hints,
-			"Invite the Slack app/user represented by the token to the channel, then rerun the command.",
+			"Invite the Slack app/user represented by the token to the conversation, then rerun the command.",
 		)
 	case "no_permission":
 		hints = append(hints,
@@ -248,7 +248,7 @@ func extractScopes(text string) []string {
 }
 
 // ConversationScopesFor picks the OAuth scope(s) needed for a conversation kind.
-func ConversationScopesFor(channelID string, info *slack.Channel, publicScope, privateScope, imScope, mpimScope string) []string {
+func ConversationScopesFor(conversationID string, info *slack.Channel, publicScope, privateScope, imScope, mpimScope string) []string {
 	if info != nil {
 		switch {
 		case info.IsIM:
@@ -262,13 +262,13 @@ func ConversationScopesFor(channelID string, info *slack.Channel, publicScope, p
 		}
 	}
 
-	channelID = strings.ToUpper(strings.TrimSpace(channelID))
+	conversationID = strings.ToUpper(strings.TrimSpace(conversationID))
 	switch {
-	case strings.HasPrefix(channelID, "C"):
+	case strings.HasPrefix(conversationID, "C"):
 		return ScopeList(publicScope)
-	case strings.HasPrefix(channelID, "D"):
+	case strings.HasPrefix(conversationID, "D"):
 		return ScopeList(imScope)
-	case strings.HasPrefix(channelID, "G"):
+	case strings.HasPrefix(conversationID, "G"):
 		return ScopeList(privateScope, mpimScope)
 	default:
 		return ScopeList(publicScope, privateScope, imScope, mpimScope)
@@ -276,9 +276,9 @@ func ConversationScopesFor(channelID string, info *slack.Channel, publicScope, p
 }
 
 // ConversationScopeHints returns extra guidance for ambiguous conversation IDs.
-func ConversationScopeHints(channelID, privateScope, mpimScope string) []string {
-	channelID = strings.ToUpper(strings.TrimSpace(channelID))
-	if !strings.HasPrefix(channelID, "G") {
+func ConversationScopeHints(conversationID, privateScope, mpimScope string) []string {
+	conversationID = strings.ToUpper(strings.TrimSpace(conversationID))
+	if !strings.HasPrefix(conversationID, "G") {
 		return nil
 	}
 	return []string{fmt.Sprintf("G... conversation IDs can be private channels or multi-person DMs; use %s for private channels or %s for multi-person DMs.", privateScope, mpimScope)}
