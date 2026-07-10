@@ -55,6 +55,25 @@ go build -o slack-utils .
 
 ## Usage
 
+### Initialize the user cache
+
+Create `users.json` with every user returned by Slack for the workspace:
+
+```bash
+slack-utils users init
+```
+
+This command uses cursor pagination, requesting at most 200 users per page and waiting 3 seconds between pages by default. It never overwrites an existing cache; if `users.json` already exists, it exits successfully without making a Slack API request. Slack includes invited and deactivated users in `users.list`, which keeps historical exports resolvable.
+
+The token requires `users:read`. Add `users:read.email`, then reinstall or reauthorize the Slack app, to cache email addresses; profiles without an available email are stored using their Slack user ID. For an Enterprise Grid org token, pass the workspace as `-team T123...`.
+
+```bash
+# Choose another destination or a more conservative request delay
+slack-utils users init -output /path/to/users.json -delay 5s
+```
+
+### Export a channel
+
 ```bash
 slack-utils channels export -channel <conversation-id> [flags]
 ```
@@ -93,7 +112,7 @@ Useful flags:
 
 The export is written as JSON with top-level conversation metadata and a `messages` array. Thread replies are nested under each root message in `replies`.
 
-The CLI may also create `users.json` as a local user cache.
+Channel exports update `users.json` as a local user cache when they encounter users that are not already cached. Run `slack-utils users init` first to populate the complete workspace cache.
 
 ## Releasing
 

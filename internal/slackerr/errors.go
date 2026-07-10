@@ -17,6 +17,7 @@ const (
 	MethodConversationsInfo    = "conversations.info"
 	MethodConversationsReplies = "conversations.replies"
 	MethodUsersInfo            = "users.info"
+	MethodUsersList            = "users.list"
 )
 
 var scopePattern = regexp.MustCompile(`\b[a-zA-Z0-9.-]+:[a-zA-Z0-9.:-]+\b`)
