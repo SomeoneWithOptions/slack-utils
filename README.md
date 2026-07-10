@@ -1,6 +1,6 @@
 # slack-utils
 
-A small CLI for exporting Slack conversation history to JSON.
+`slack-utils` is a small command-line tool for exporting Slack conversation history to JSON. It can export public channels, private channels, direct messages, and group direct messages, with thread replies nested beneath their root messages.
 
 ## Install
 
@@ -16,113 +16,52 @@ Windows PowerShell:
 iwr -useb https://github.com/SomeoneWithOptions/slack-utils/releases/latest/download/install.ps1 | iex
 ```
 
-The installer downloads the latest GitHub Release asset for your OS/architecture and verifies `checksums.txt` before installing. Set `INSTALL_DIR=/path/to/bin` on macOS/Linux to choose a different install location.
+## Quick start
 
-## Setup
-
-Set a Slack API token with access to the conversation you want to export:
+Set a Slack API token that can access the conversation:
 
 ```bash
 export SLACK_TOKEN="xoxb-your-token"
 ```
 
-Required Slack OAuth history scope depends on the conversation ID:
-
-- `C...` public channel: `channels:history`
-- `G...` private channel: `groups:history`
-- `D...` direct message: `im:history`
-- `G...` multi-person DM: `mpim:history`
-
-Optional scopes:
-
-- `users:read` / `users:read.email` to resolve users
-- `channels:read`, `groups:read`, `im:read`, or `mpim:read` to resolve conversation names
-
-## Run
-
-From this repo:
+Export a channel to `export.json`:
 
 ```bash
-go run . channels export -channel C1234567890 -o export.json
+slack-utils channels export -channel C1234567890
 ```
 
-Or build and run the binary:
+A few common variations:
 
 ```bash
-go build -o slack-utils .
-./slack-utils channels export -channel C1234567890 -o export.json
+# Export the last seven days
+slack-utils channels export -channel C1234567890 -since 7d
+
+# Export a date range to a custom file
+slack-utils channels export \
+  -channel C1234567890 \
+  -since 2024-05-01 \
+  -to 2024-05-31 \
+  -o may-2024.json
+
+# Export root messages without thread replies
+slack-utils channels export -channel C1234567890 -no-replies
 ```
 
-## Usage
-
-### Initialize the user cache
-
-Create `users.json` with every user returned by Slack for the workspace:
+Optionally initialize the workspace user cache before exporting:
 
 ```bash
 slack-utils users init
 ```
 
-This command uses cursor pagination, requesting at most 200 users per page and waiting 3 seconds between pages by default. It never overwrites an existing cache; if `users.json` already exists, it exits successfully without making a Slack API request. Slack includes invited and deactivated users in `users.list`, which keeps historical exports resolvable.
+This creates `users.json`, which the exporter uses to resolve Slack user IDs.
 
-The token requires `users:read`. Add `users:read.email`, then reinstall or reauthorize the Slack app, to cache email addresses; profiles without an available email are stored using their Slack user ID. For an Enterprise Grid org token, pass the workspace as `-team T123...`.
+## Documentation
 
-```bash
-# Choose another destination or a more conservative request delay
-slack-utils users init -output /path/to/users.json -delay 5s
-```
+See [docs/usage.md](docs/usage.md) for token scopes, all command flags, time filters, user-cache behavior, output details, building from source, and release instructions.
 
-### Export a channel
+Command-specific help is also available from the CLI:
 
 ```bash
-slack-utils channels export -channel <conversation-id> [flags]
+slack-utils channels export -h
+slack-utils users init -h
 ```
-
-Examples:
-
-```bash
-# Export everything, including thread replies, to ./export.json
-slack-utils channels export -channel C1234567890
-
-# Export the last 7 days
-slack-utils channels export -channel C1234567890 -since 7d
-
-# Export a date range
-slack-utils channels export -channel C1234567890 -since 2024-05-01 -to 2024-05-31
-
-# Export only root messages, no thread replies
-slack-utils channels export -channel C1234567890 -no-replies
-
-# Limit root messages and write to a custom file
-slack-utils channels export -channel C1234567890 -limit 50 -o /tmp/export.json
-```
-
-Useful flags:
-
-| Flag | Description |
-| --- | --- |
-| `-channel` | Slack conversation ID to export. Required. |
-| `-o`, `-output` | Output JSON path. Default: `./export.json`. |
-| `-since` | Start time: RFC3339, `YYYY-MM-DD`, or relative duration like `7d` / `24h`. |
-| `-to` | End time: RFC3339 or `YYYY-MM-DD`. |
-| `-limit` | Maximum root messages to export. `0` means no limit. |
-| `-no-replies` | Skip thread replies. |
-| `-delay` | Delay between Slack API requests. Default: `1s`. |
-| `-q`, `-quiet` | Suppress progress logs. |
-
-The export is written as JSON with top-level conversation metadata and a `messages` array. Thread replies are nested under each root message in `replies`.
-
-Channel exports update `users.json` as a local user cache when they encounter users that are not already cached. Run `slack-utils users init` first to populate the complete workspace cache.
-
-## Releasing
-
-Releases are published from the `release` branch only.
-
-```bash
-git checkout release
-git merge main
-git tag v0.1.0
-git push origin release v0.1.0
-```
-
-Pushing a `v*` tag that points at the current `release` branch HEAD starts the GitHub Actions release workflow. It builds macOS, Linux, and Windows binaries for `amd64` and `arm64`, creates checksums, and attaches everything to the GitHub Release.
