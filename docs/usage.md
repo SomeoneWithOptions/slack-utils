@@ -31,6 +31,7 @@ The required history scope depends on the conversation being exported:
 Optional scopes improve the exported metadata:
 
 - `users:read` and `users:read.email` resolve user IDs to email addresses.
+- `users:read` enables `users info` to fetch a complete user profile; `users:read.email` includes its email address.
 - `users:read.email` enables `users lookup` to find a user ID by email address.
 - `channels:read`, `groups:read`, `im:read`, or `mpim:read` resolve conversation names.
 
@@ -45,6 +46,16 @@ slack-utils users lookup -email person@example.com
 ```
 
 The command prints only the user ID, making it suitable for scripts. It calls Slack's `users.lookupByEmail` method and requires `SLACK_TOKEN` with the `users:read.email` scope.
+
+## User information
+
+Get all available information for a Slack user ID:
+
+```bash
+slack-utils users info -id U1234567890
+```
+
+The command prints the `users.info` response's user object as indented JSON to stdout, so it can be redirected to a file. It requires `SLACK_TOKEN` with the `users:read` scope. Add `users:read.email` to include the profile email address.
 
 ## User cache
 

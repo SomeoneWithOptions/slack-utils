@@ -3,6 +3,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -71,6 +72,7 @@ Usage:
 Commands:
   %[1]s conversations export  Export a conversation's message history to JSON
   %[1]s users lookup          Find a Slack user ID by email address
+  %[1]s users info            Get all available information for a Slack user ID
   %[1]s users cache init      Initialize users.json with all workspace users
   %[1]s users cache update    Add missing workspace users to users.json
 
@@ -102,6 +104,8 @@ func runUsersCommand(args []string) {
 		printUsersUsage(os.Stdout)
 	case "lookup":
 		runUsersLookup(args[1:])
+	case "info":
+		runUsersInfo(args[1:])
 	case "cache":
 		runUsersCacheCommand(args[1:])
 	default:
@@ -119,6 +123,7 @@ Usage:
 
 Commands:
   lookup   Find a Slack user ID by email address
+  info     Get all available information for a Slack user ID
   cache    Manage the local workspace user cache
 
 Run "%[1]s users <command> -h" for command-specific help.
@@ -170,6 +175,57 @@ func runUsersLookup(args []string) {
 		applog.Fail(err)
 	}
 	fmt.Println(userID)
+}
+
+func runUsersInfo(args []string) {
+	var userID string
+	fs := flag.NewFlagSet("users info", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	fs.StringVar(&userID, "id", "", "Slack user ID (e.g., U123... or W123...)")
+	fs.Usage = func() {
+		fmt.Fprintf(fs.Output(), "Usage:\n  %s users info -id U1234567890\n\nFlags:\n", cliName)
+		fs.PrintDefaults()
+	}
+
+	if hasHelpArg(args) {
+		fs.SetOutput(os.Stdout)
+		fs.Usage()
+		return
+	}
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
+	if fs.NArg() > 0 {
+		fmt.Fprintf(os.Stderr, "unexpected argument %q\n\n", fs.Arg(0))
+		fs.Usage()
+		os.Exit(2)
+	}
+	if strings.TrimSpace(userID) == "" {
+		fmt.Fprint(os.Stderr, "-id is required\n\n")
+		fs.Usage()
+		os.Exit(2)
+	}
+
+	token := strings.TrimSpace(os.Getenv(users.DefaultTokenEnv))
+	if token == "" {
+		applog.Fail(fmt.Errorf("environment variable %s must be set to a Slack token with users:read", users.DefaultTokenEnv))
+	}
+	retryConfig := slack.DefaultRetryConfig()
+	retryConfig.MaxRetries = 3
+	retryConfig.Handlers = append(slack.ConnectionOnlyRetryHandlers(), slack.NewServerErrorRetryHandler(retryConfig))
+	api := slack.New(token, slack.OptionRetryConfig(retryConfig))
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
+	user, err := users.Info(ctx, api, userID, users.DefaultTokenEnv)
+	if err != nil {
+		applog.Fail(err)
+	}
+	encoder := json.NewEncoder(os.Stdout)
+	encoder.SetIndent("", "  ")
+	if err := encoder.Encode(user); err != nil {
+		applog.Fail(fmt.Errorf("write user info: %w", err))
+	}
 }
 
 func runUsersCacheCommand(args []string) {
