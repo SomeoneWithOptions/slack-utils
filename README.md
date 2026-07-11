@@ -47,6 +47,12 @@ slack-utils conversations export \
 slack-utils conversations export -channel C1234567890 -no-replies
 ```
 
+Look up a Slack user ID by email address:
+
+```bash
+slack-utils users lookup -email person@example.com
+```
+
 Optionally initialize the workspace user cache before exporting:
 
 ```bash
@@ -67,6 +73,7 @@ Command-specific help is also available from the CLI:
 
 ```bash
 slack-utils conversations export -h
+slack-utils users lookup -h
 slack-utils users cache init -h
 slack-utils users cache update -h
 ```

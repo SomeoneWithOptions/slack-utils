@@ -31,9 +31,20 @@ The required history scope depends on the conversation being exported:
 Optional scopes improve the exported metadata:
 
 - `users:read` and `users:read.email` resolve user IDs to email addresses.
+- `users:read.email` enables `users lookup` to find a user ID by email address.
 - `channels:read`, `groups:read`, `im:read`, or `mpim:read` resolve conversation names.
 
 After adding scopes to a Slack app, reinstall or reauthorize it for the changes to take effect.
+
+## User lookup
+
+Find a Slack user ID by email address:
+
+```bash
+slack-utils users lookup -email person@example.com
+```
+
+The command prints only the user ID, making it suitable for scripts. It calls Slack's `users.lookupByEmail` method and requires `SLACK_TOKEN` with the `users:read.email` scope.
 
 ## User cache
 

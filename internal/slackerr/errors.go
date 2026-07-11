@@ -18,6 +18,7 @@ const (
 	MethodConversationsReplies = "conversations.replies"
 	MethodUsersInfo            = "users.info"
 	MethodUsersList            = "users.list"
+	MethodUsersLookupByEmail   = "users.lookupByEmail"
 )
 
 var scopePattern = regexp.MustCompile(`\b[a-zA-Z0-9.-]+:[a-zA-Z0-9.:-]+\b`)
@@ -152,6 +153,10 @@ func (e *apiError) hints(code string, isSlackErr bool) []string {
 	case "no_permission":
 		hints = append(hints,
 			"Check that the Slack app has permission to access this workspace and conversation.",
+		)
+	case "users_not_found":
+		hints = append(hints,
+			"Verify the email belongs to an active member of the token's workspace.",
 		)
 	}
 

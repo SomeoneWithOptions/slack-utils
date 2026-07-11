@@ -70,6 +70,7 @@ Usage:
 
 Commands:
   %[1]s conversations export  Export a conversation's message history to JSON
+  %[1]s users lookup          Find a Slack user ID by email address
   %[1]s users cache init      Initialize users.json with all workspace users
   %[1]s users cache update    Add missing workspace users to users.json
 
@@ -99,6 +100,8 @@ func runUsersCommand(args []string) {
 	switch args[0] {
 	case "-h", "--help", "help":
 		printUsersUsage(os.Stdout)
+	case "lookup":
+		runUsersLookup(args[1:])
 	case "cache":
 		runUsersCacheCommand(args[1:])
 	default:
@@ -115,10 +118,58 @@ Usage:
   %[1]s users <command> [flags]
 
 Commands:
+  lookup   Find a Slack user ID by email address
   cache    Manage the local workspace user cache
 
-Run "%[1]s users cache -h" for cache actions.
+Run "%[1]s users <command> -h" for command-specific help.
 `, cliName)
+}
+
+func runUsersLookup(args []string) {
+	var email string
+	fs := flag.NewFlagSet("users lookup", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	fs.StringVar(&email, "email", "", "Email address of the Slack user")
+	fs.Usage = func() {
+		fmt.Fprintf(fs.Output(), "Usage:\n  %s users lookup -email person@example.com\n\nFlags:\n", cliName)
+		fs.PrintDefaults()
+	}
+
+	if hasHelpArg(args) {
+		fs.SetOutput(os.Stdout)
+		fs.Usage()
+		return
+	}
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
+	if fs.NArg() > 0 {
+		fmt.Fprintf(os.Stderr, "unexpected argument %q\n\n", fs.Arg(0))
+		fs.Usage()
+		os.Exit(2)
+	}
+	if strings.TrimSpace(email) == "" {
+		fmt.Fprint(os.Stderr, "-email is required\n\n")
+		fs.Usage()
+		os.Exit(2)
+	}
+
+	token := strings.TrimSpace(os.Getenv(users.DefaultTokenEnv))
+	if token == "" {
+		applog.Fail(fmt.Errorf("environment variable %s must be set to a Slack token with users:read.email", users.DefaultTokenEnv))
+	}
+	retryConfig := slack.DefaultRetryConfig()
+	retryConfig.MaxRetries = 3
+	retryConfig.Handlers = append(slack.ConnectionOnlyRetryHandlers(), slack.NewServerErrorRetryHandler(retryConfig))
+	api := slack.New(token, slack.OptionRetryConfig(retryConfig))
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
+	userID, err := users.LookupByEmail(ctx, api, email, users.DefaultTokenEnv)
+	if err != nil {
+		applog.Fail(err)
+	}
+	fmt.Println(userID)
 }
 
 func runUsersCacheCommand(args []string) {
