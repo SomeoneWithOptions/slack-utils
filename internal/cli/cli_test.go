@@ -14,7 +14,7 @@ func TestConversationsExportHelp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("help failed: %v\n%s", err, output)
 	}
-	for _, want := range []string{"-channel", "-since", "-to", "-limit", "-no-replies", "-output"} {
+	for _, want := range []string{"-channel", "-url", "-since", "-to", "-limit", "-no-replies", "-output"} {
 		if !strings.Contains(output, want) {
 			t.Errorf("export help missing %q:\n%s", want, output)
 		}
@@ -27,8 +27,26 @@ func TestConversationsExportRequiresChannel(t *testing.T) {
 	if !ok || exitErr.ExitCode() != 2 {
 		t.Fatalf("exit error = %v, want status 2\n%s", err, output)
 	}
-	if !strings.Contains(output, "-channel is required") {
+	if !strings.Contains(output, "-channel or -url is required") {
 		t.Errorf("missing required-flag diagnostic:\n%s", output)
+	}
+}
+
+func TestParseThreadURL(t *testing.T) {
+	tests := []struct {
+		url, channel, timestamp string
+	}{
+		{"https://vineskills.slack.com/archives/C0BEKH93PT4/p1784581959165149", "C0BEKH93PT4", "1784581959.165149"},
+		{"https://vineskills.slack.com/archives/C0BEKH93PT4/p1784582000123456?thread_ts=1784581959.165149&cid=C0BEKH93PT4", "C0BEKH93PT4", "1784581959.165149"},
+	}
+	for _, tt := range tests {
+		channel, timestamp, err := parseThreadURL(tt.url)
+		if err != nil || channel != tt.channel || timestamp != tt.timestamp {
+			t.Errorf("parseThreadURL(%q) = %q, %q, %v; want %q, %q", tt.url, channel, timestamp, err, tt.channel, tt.timestamp)
+		}
+	}
+	if _, _, err := parseThreadURL("https://vineskills.slack.com/not-a-thread"); err == nil {
+		t.Fatal("parseThreadURL(invalid) returned no error")
 	}
 }
 

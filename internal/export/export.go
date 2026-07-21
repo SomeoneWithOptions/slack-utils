@@ -33,16 +33,17 @@ type Logger interface {
 
 // Options configures a conversation history export.
 type Options struct {
-	ConversationID string
-	Delay          time.Duration
-	Since          string
-	To             string
-	Output         string
-	Limit          int
-	NoReplies      bool
-	UserCachePath  string
-	TokenEnv       string
-	Log            Logger
+	ConversationID  string
+	ThreadTimestamp string
+	Delay           time.Duration
+	Since           string
+	To              string
+	Output          string
+	Limit           int
+	NoReplies       bool
+	UserCachePath   string
+	TokenEnv        string
+	Log             Logger
 }
 
 // Result is the on-disk export schema. The channel_* JSON keys are retained
@@ -101,6 +102,12 @@ func Run(opts Options) {
 	if err != nil {
 		applog.Fail(fmt.Errorf("invalid -to value %q: %w", opts.To, err))
 	}
+	if opts.ThreadTimestamp != "" {
+		if _, err := timestamp.ParseSlack(opts.ThreadTimestamp); err != nil {
+			applog.Fail(fmt.Errorf("invalid thread timestamp %q: %w", opts.ThreadTimestamp, err))
+		}
+		oldest, latest = opts.ThreadTimestamp, opts.ThreadTimestamp
+	}
 	if oldest != "" && latest != "" {
 		oldestTime, errOldest := timestamp.ParseSlack(oldest)
 		latestTime, errLatest := timestamp.ParseSlack(latest)
@@ -114,7 +121,9 @@ func Run(opts Options) {
 	log := opts.Log
 
 	log.Logf("starting export for conversation %s with request delay %s", opts.ConversationID, opts.Delay)
-	if oldest != "" || latest != "" {
+	if opts.ThreadTimestamp != "" {
+		log.Logf("single thread: %s", opts.ThreadTimestamp)
+	} else if oldest != "" || latest != "" {
 		log.Logf("time range filter: since=%s to=%s", timestamp.FormatBoundForLog(opts.Since, oldest), timestamp.FormatBoundForLog(opts.To, latest))
 	}
 	if opts.Limit > 0 {

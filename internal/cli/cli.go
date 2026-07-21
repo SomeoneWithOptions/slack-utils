@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/SomeoneWithOptions/slack-utils/internal/applog"
 	"github.com/SomeoneWithOptions/slack-utils/internal/export"
+	"github.com/SomeoneWithOptions/slack-utils/internal/timestamp"
 	"github.com/SomeoneWithOptions/slack-utils/internal/users"
 	"github.com/slack-go/slack"
 )
@@ -425,12 +427,14 @@ func runUsersUpdate(args []string) {
 
 func runConversationsExport(args []string) {
 	var (
-		opts  export.Options
-		quiet bool
+		opts      export.Options
+		threadURL string
+		quiet     bool
 	)
 	fs := flag.NewFlagSet("conversations export", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	fs.StringVar(&opts.ConversationID, "channel", "", "Slack conversation ID (e.g., C123..., G123..., or D123...)")
+	fs.StringVar(&threadURL, "url", "", "Slack thread URL to export instead of a whole conversation")
 	fs.DurationVar(&opts.Delay, "delay", time.Second, "Delay between requests")
 	fs.StringVar(&opts.Since, "since", "", "Only include messages on or after this time (RFC3339, YYYY-MM-DD, or relative duration like 7d/24h)")
 	fs.StringVar(&opts.To, "to", "", "Only include messages on or before this time (RFC3339 or YYYY-MM-DD)")
@@ -441,7 +445,7 @@ func runConversationsExport(args []string) {
 	fs.BoolVar(&quiet, "quiet", false, "Suppress progress logs (errors still go to stderr)")
 	fs.BoolVar(&quiet, "q", false, "Suppress progress logs (errors still go to stderr)")
 	fs.Usage = func() {
-		fmt.Fprintf(fs.Output(), "Usage:\n  %s conversations export -channel C123 [flags]\n\nFlags:\n", cliName)
+		fmt.Fprintf(fs.Output(), "Usage:\n  %s conversations export (-channel C123 | -url https://workspace.slack.com/archives/C123/p...) [flags]\n\nFlags:\n", cliName)
 		fs.PrintDefaults()
 	}
 
@@ -458,8 +462,19 @@ func runConversationsExport(args []string) {
 		fs.Usage()
 		os.Exit(2)
 	}
+	threadURL = strings.TrimSpace(threadURL)
+	if threadURL != "" {
+		if opts.ConversationID != "" || opts.Since != "" || opts.To != "" {
+			applog.Fail(fmt.Errorf("-url cannot be combined with -channel, -since, or -to"))
+		}
+		var err error
+		opts.ConversationID, opts.ThreadTimestamp, err = parseThreadURL(threadURL)
+		if err != nil {
+			applog.Fail(err)
+		}
+	}
 	if opts.ConversationID == "" {
-		fmt.Fprint(os.Stderr, "-channel is required\n\n")
+		fmt.Fprint(os.Stderr, "-channel or -url is required\n\n")
 		fs.Usage()
 		os.Exit(2)
 	}
@@ -471,6 +486,30 @@ func runConversationsExport(args []string) {
 	opts.TokenEnv = export.DefaultTokenEnv
 
 	export.Run(opts)
+}
+
+func parseThreadURL(raw string) (string, string, error) {
+	u, err := url.ParseRequestURI(raw)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return "", "", fmt.Errorf("invalid Slack thread URL %q", raw)
+	}
+	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
+	if len(parts) != 3 || parts[0] != "archives" || parts[1] == "" || len(parts[2]) < 2 || parts[2][0] != 'p' {
+		return "", "", fmt.Errorf("invalid Slack thread URL %q: expected /archives/<conversation>/p<timestamp>", raw)
+	}
+
+	compact := parts[2][1:]
+	if len(compact) <= 6 || strings.Trim(compact, "0123456789") != "" {
+		return "", "", fmt.Errorf("invalid Slack message timestamp in URL %q", raw)
+	}
+	threadTS := u.Query().Get("thread_ts")
+	if threadTS == "" {
+		threadTS = compact[:len(compact)-6] + "." + compact[len(compact)-6:]
+	}
+	if _, err := timestamp.ParseSlack(threadTS); err != nil {
+		return "", "", fmt.Errorf("invalid Slack thread timestamp in URL %q: %w", raw, err)
+	}
+	return parts[1], threadTS, nil
 }
 
 func hasHelpArg(args []string) bool {

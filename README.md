@@ -33,6 +33,10 @@ slack-utils conversations export -channel C1234567890
 A few common variations:
 
 ```bash
+# Export one thread from its Slack URL
+slack-utils conversations export \
+  -url 'https://workspace.slack.com/archives/C1234567890/p1714557600123456'
+
 # Export the last seven days
 slack-utils conversations export -channel C1234567890 -since 7d
 

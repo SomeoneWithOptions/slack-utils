@@ -107,11 +107,15 @@ slack-utils users cache update
 slack-utils conversations export -channel <conversation-id> [flags]
 ```
 
-The `-channel` value may identify a public channel (`C...`), private channel or multi-person DM (`G...`), or direct message (`D...`). By default, the command exports all available root messages and thread replies to `./export.json`.
+The `-channel` value may identify a public channel (`C...`), private channel or multi-person DM (`G...`), or direct message (`D...`). By default, the command exports all available root messages and thread replies to `./export.json`. Use `-url` instead to export only the thread at a Slack message URL.
 
 Examples:
 
 ```bash
+# Export one thread from a Slack URL
+slack-utils conversations export \
+  -url 'https://workspace.slack.com/archives/C1234567890/p1714557600123456'
+
 # Export all available history, including thread replies
 slack-utils conversations export -channel C1234567890
 
@@ -144,7 +148,8 @@ slack-utils conversations export \
 
 | Flag | Default | Description |
 | --- | --- | --- |
-| `-channel` | — | Slack conversation ID to export. Required. |
+| `-channel` | — | Slack conversation ID to export. Required unless `-url` is used. |
+| `-url` | — | Slack thread URL to export. Cannot be combined with `-channel`, `-since`, or `-to`. |
 | `-o`, `-output` | `./export.json` | Path at which to write the export JSON. |
 | `-since` | — | Include messages on or after this time. Accepts RFC 3339, `YYYY-MM-DD`, or a relative duration such as `7d` or `24h`. |
 | `-to` | — | Include messages on or before this time. Accepts RFC 3339 or `YYYY-MM-DD`. |
